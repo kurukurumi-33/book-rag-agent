@@ -1,0 +1,38 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# 环境变量（含 API Key，绝对不要提交）
+.env
+.env.local
+
+# 本地私有配置（含数据库密码）
+application-local.yml
+application-local.yaml
+
+# IDEA / VS Code
+.idea/
+.vscode/
+*.iml
+
+# 数据
+data/
+*.db
+*.sqlite3
+
+# 向量库本地文件
+chroma_db/
+
+# Maven 构建产物（target/classes 里还有一份 application-local.yml 的副本）
+target/
+
+# 前端（M4）
+node_modules/
+dist/
+
+# 杂项
+*.log
+.DS_Store
+Thumbs.db

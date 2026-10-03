@@ -1,0 +1,48 @@
+server:
+  port: 8080
+  error:
+    # 把异常消息放进错误响应体。默认 Spring Boot 只回 {status, error, path}，
+    # 排查时看不到原因，只能去翻控制台。开发期开着；生产环境要评估信息泄露风险。
+    include-message: always
+
+spring:
+  application:
+    name: book-service
+  # 本地私有配置（含密码），不进 Git；文件不存在时自动跳过
+  config:
+    import: optional:classpath:application-local.yml
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://127.0.0.1:3306/book_agent?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8&allowPublicKeyRetrieval=true
+    username: root
+    # 密码通过环境变量 DB_PASSWORD 注入，避免硬编码提交到 Git
+    password: ${DB_PASSWORD:CHANGE_ME}
+  jackson:
+    default-property-inclusion: non_null
+  # 注：HTTP 超时不在这里配。AiServiceClient 显式指定了 HTTP/1.1 的请求工厂
+  # （原因见那个类的注释），超时跟着一起设在代码里 —— 两处配会互相掩盖。
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      id-type: auto
+    banner: false
+
+# Python AI 服务
+ai-service:
+  # 用 127.0.0.1 而不是 localhost：
+  # Windows 上 localhost 会同时解析出 127.0.0.1(IPv4) 和 ::1(IPv6)，
+  # Java 的解析顺序和 curl/ping 不一致，可能先试 ::1 —— 而 uvicorn 只绑了 IPv4，
+  # 于是连不上。服务间调用直接写 IP，绕开这个二义性。
+  base-url: http://127.0.0.1:8000
+  # 一轮批量抽取发多少条。50 条 × 单条约 5 秒 ÷ 并发 8 ≈ 35 秒，控制在 HTTP 超时舒适区内
+  batch-size: 50
+  # 转发给 AI 服务的最大并发数。DeepSeek 单账号并发上限保守估计 10~20，取 8 留一倍余量防 429 限流
+  max-concurrency: 8
+
+logging:
+  level:
+    com.book: debug

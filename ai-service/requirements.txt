@@ -1,0 +1,37 @@
+# 二手书 AI 服务依赖
+#
+# 装（国内走清华镜像）：
+#     .venv\Scripts\activate
+#     pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+#
+# ⚠️ torch 单独说明：这里要的是 **CPU 版**。
+# 默认 pip 会拉 CUDA 版（2GB+），本机没 N 卡就是白下。
+# 显式装 CPU 版的命令见 README 的「环境搭建」一节。
+
+# Web 框架
+fastapi
+uvicorn[standard]
+
+# LangChain
+# 本项目用到它的地方：ChatOpenAI、with_structured_output、batch(max_concurrency)
+langchain
+langchain-openai
+langchain-community
+
+# 配置
+python-dotenv
+pydantic-settings
+
+# 语义检索（M2）
+# sentence-transformers —— 跑本地 BGE 模型
+# chromadb              —— 嵌入式向量库，跑在进程内，不用起服务
+# torch                 —— sentence-transformers 的底层，**必须 CPU 版**
+sentence-transformers
+chromadb
+torch
+
+# 调 Spring Boot 主服务的 HTTP 客户端
+httpx
+
+# 开发脚本用（种子数据生成 / 临时实验），AI 服务本体不用
+pymysql
