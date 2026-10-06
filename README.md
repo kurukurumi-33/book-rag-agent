@@ -1,4 +1,17 @@
-# 二手书智能匹配 Agent
+<p align="center">
+  <h1 align="center">二手书智能匹配 Agent</h1>
+  <p align="center">
+    二手书群帖子 → 结构化抽取 → 向量语义检索 → 会自己调工具的对话 Agent<br>
+    Java 24 / Spring Boot 4 主服务 + Python 3.14 / FastAPI AI 服务
+  </p>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Java-24-orange" alt="Java">
+  <img src="https://img.shields.io/badge/Spring_Boot-4.1.1-green" alt="Spring Boot">
+  <img src="https://img.shields.io/badge/Python-3.14-blue" alt="Python">
+  <img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="License">
+</p>
 
 大学二手书群里的帖子都是这种一句话：「带笔记的线代，15 出，有意私聊」。
 这个项目把这类句子抽成结构化字段（书名、价格、有没有笔记、成色），
@@ -20,32 +33,43 @@ CRUD 那部分没什么好讲的。
 
 ---
 
-## 演示
+## 目录
 
-启动后打开 `http://localhost:8080`，是个聊天界面。问一句：
+- [演示](#-演示)
+- [架构](#-架构)
+- [技术栈](#技术栈)
+- [快速开始](#-快速开始)
+- [接口一览](#接口一览)
+- [关键设计决策](#关键设计决策)
+- [文档](#文档)
+- [目录结构](#目录结构)
+- [开发日志](#开发日志)
+- [常见问题](#-常见问题)
 
-```
-有笔记的线性代数，30 块以内
-```
+---
 
-agent 自己去调 `search_books`，然后把书名、价格、成色、卖家列出来。
-再追问：
+## 📸 演示
 
-```
-那 8 块那本呢，成色和还在不在售？
-```
+启动后打开 `http://localhost:8080`，是个聊天界面。
 
-它会接着调 `get_post_detail` 查那一本的详情。这两句是实测能触发
-`search_books` → `get_post_detail` 接力的问法。
+问「有笔记的线性代数，30 以内」，agent 自己去调 `search_books`，把书名、价格、成色列出来。
+再追问「8 块那本还有吗，成色怎么样」——8 块的有两本，它会先反问要哪一本，确定了再去查。
+这两句是实测能触发 `search_books` → `get_post_detail` 接力的问法。
 
-页面上每次工具调用单独占一行，带工具名、参数、返回条数。这一栏是重点：
+页面上每次工具调用单独占一行，带工具名、参数、返回条数。下面第二张图是重点：
 只放最终回答的话，看的人分不清「agent 自己决定查了库」和「硬编码了一段话」。
+
+![聊天界面](docs/screenshots/01-chat.png)
+
+![Agent 的工具调用与书卡](docs/screenshots/02-tool-calls.png)
+
+![AI 服务不可用时的提示](docs/screenshots/03-offline.png)
 
 完整操作步骤见 `docs/演示流程.md`。
 
 ---
 
-## 架构
+## 🏗 架构
 
 ```
             浏览器  ── POST /api/chat ──▶  主服务 :8080
@@ -104,7 +128,7 @@ agent 的工具回调最能说明这个划分：代码上看是个普通函数�
 
 ---
 
-## 快速开始
+## 🚀 快速开始
 
 需要三个进程：**MySQL → 主服务 → AI 服务**，外加一个浏览器。
 
@@ -174,8 +198,10 @@ Windows 上 `localhost` 会同时解析出 IPv4 和 IPv6，而 uvicorn 只绑了
 客户端可能先试 `::1` 然后失败 —— 表现成「服务明明起着却连不上」。
 
 **3. 改完 Java 代码要重启。** 项目没装 devtools。
-（改 `src/main/resources/static/` 下的前端文件**不用**重启 —— spring-boot:run
-默认开着 `addResources`，`src/main/resources` 直接进 classpath。）
+
+改 `src/main/resources/static/` 下的前端文件**也要重启**：页面实际读的是
+`target/classes/static/` 里那份**副本**，不重启的话浏览器拿到的还是旧页面。
+（`spring-boot:run` 的 `addResources` 默认是 `false`，不会把源码目录直接挂上 classpath。）
 
 ---
 
@@ -290,6 +316,50 @@ agent-book/
 
 M1–M5 是计划内；M6 是我给自己留的弹性目标，没做也不影响前面几块。
 每一块做完都留了可复现的验证结果（就是上面那一列），不是"写完了"就划掉。
+
+---
+
+## ❓ 常见问题
+
+**Q：为什么不直接用 `LIKE` 做关键词检索？**
+
+因为「同济版高数」和「高等数学 同济大学出版社」字面上没有公共子串。
+实测：库里有 12 条《高等数学》时，`book_name LIKE '%高数%'` 命中 **0** 条。
+
+**Q：检索为什么一定要有相似度阈值？**
+
+向量检索**永远**会返回 top_k 条，哪怕库里根本没有这本书。
+搜「量子力学」在默认阈值下返回 0 条；把阈值放到 0，会返回 5 条《高等数学》——
+相似度全是 **0.4819**。所以它不是一个可以随手调的参数，它决定检索结果能不能信。
+
+**Q：索引里为什么不存价格和成色？**
+
+向量只负责回答「是哪本书」，条件过滤交给结构化字段。实测过两件事：
+书名在检索文本里重复出现反而**拉低**分数（0.6258 → 0.6054 → 0.5953）；
+用「未知」给空字段占位会毒化检索，全体掉 0.03~0.11。
+
+**Q：换一个 LLM 要改多少？**
+
+三行。`ai-service/.env` 里的 `LLM_MODEL` / `LLM_BASE_URL` / `LLM_API_KEY`。
+走的是 OpenAI 兼容接口，DeepSeek、通义、本地 vLLM 都能接。
+
+**Q：agent 为什么手写循环，不用 LangChain 的 `create_agent`？**
+
+两版都在 `ai-service/app/agent/loop.py` 里（`chat_once` 和 `chat_once_framework`），
+可以直接对着看。实测手写 **38 行**、框架 **43 行**（都不含 docstring）——
+框架省掉的是 `bind_tools`、工单↔回执配对这些协议细节，不是行数。
+
+**Q：能不用 MySQL 吗？**
+
+不能。会话历史存在主服务的 `chat_message` 表里——AI 服务自己确实不连数据库，
+但它要用历史就得走主服务的接口。这也是 LangChain 自带的 InMemory / SQLite / Redis
+三种会话存储一个都没用上的原因：它们都要求 AI 服务自己存。
+
+---
+
+## 作者
+
+[kurukurumi-33](https://github.com/kurukurumi-33)
 
 ---
 
