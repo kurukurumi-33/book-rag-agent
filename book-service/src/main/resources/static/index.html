@@ -84,6 +84,34 @@
     border: 1px solid var(--line);
     border-bottom-left-radius: 3px;
   }
+
+  /* 模型回答渲染出来的块级内容。父级是 pre-wrap，这里要还原成 normal，
+     否则块与块之间会多出一堆空白（用户气泡仍是纯文本，保持 pre-wrap） */
+  .bubble.rich { white-space: normal; }
+  .bubble.rich > :first-child { margin-top: 0; }
+  .bubble.rich > :last-child { margin-bottom: 0; }
+  .bubble.rich p { margin: 0 0 8px; }
+  .bubble.rich ul,
+  .bubble.rich ol { margin: 0 0 8px; padding-left: 22px; }
+  .bubble.rich li { margin: 3px 0; }
+  .bubble.rich code {
+    background: #eef1f6;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.92em;
+  }
+  .bubble.rich table {
+    border-collapse: collapse;
+    margin: 4px 0 8px;
+    font-size: 0.95em;
+  }
+  .bubble.rich th,
+  .bubble.rich td {
+    border: 1px solid var(--line);
+    padding: 4px 10px;
+    text-align: left;
+  }
+  .bubble.rich th { background: #f5f7fa; font-weight: 600; }
   .row.agent .col { max-width: min(680px, 85%); display: flex; flex-direction: column; gap: 10px; }
   .row.agent .bubble { max-width: 100%; }
 
@@ -282,6 +310,108 @@ function el(tag, attrs, ...children) {
   return node;
 }
 
+/**
+ * 把模型回答里的 markdown 渲染成 DOM。
+ *
+ * 为什么在前端做、而不是让模型别输出 markdown：试过在 SYSTEM_PROMPT 里加一段
+ * 「回答用纯文本，不要 markdown」，结果模型连工具都不调了 —— 同一句
+ * 「8块那本还有吗，成色怎么样」，加之前工具序列是 search_books → get_post_detail → get_post_detail，
+ * 加之后变成空。格式是显示层的事，不该拿模型的行为去迁就渲染。
+ *
+ * 支持模型实际会吐的那几种：**粗体**、`代码`、表格、有序/无序列表、段落。
+ * 安全：全程 createElement / createTextNode，不碰 innerHTML ——
+ * 模型会复述卖家的原帖（那是用户输入），拼 HTML 就是自己开 XSS 门。
+ */
+function renderRich(text) {
+  const root = document.createDocumentFragment();
+
+  /** 行内：**粗体** 和 `代码`，其余原样。 */
+  function inline(s) {
+    const frag = document.createDocumentFragment();
+    const re = /(\*\*[^*]+\*\*|`[^`]+`)/g;
+    let last = 0;
+    let m;
+    while ((m = re.exec(s)) !== null) {
+      if (m.index > last) frag.append(document.createTextNode(s.slice(last, m.index)));
+      const tok = m[0];
+      frag.append(
+        tok.startsWith('**')
+          ? el('strong', { text: tok.slice(2, -2) })
+          : el('code', { text: tok.slice(1, -1) })
+      );
+      last = m.index + tok.length;
+    }
+    if (last < s.length) frag.append(document.createTextNode(s.slice(last)));
+    return frag;
+  }
+
+  const isRow = (l) => /^\s*\|.*\|\s*$/.test(l);
+  const isSep = (l) => /^\s*\|[\s:|-]+\|\s*$/.test(l) && l.includes('-');
+  const isUl = (l) => /^\s*[-*]\s+/.test(l);
+  const isOl = (l) => /^\s*\d+[.)]\s+/.test(l);
+  const cells = (l) =>
+    l.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map((c) => c.trim());
+
+  const lines = String(text == null ? '' : text).split('\n');
+  let i = 0;
+
+  while (i < lines.length) {
+    if (lines[i].trim() === '') {
+      i++;
+      continue;
+    }
+
+    // 表格：表头行 + |---|---| 分隔行 + 若干数据行
+    if (isRow(lines[i]) && isSep(lines[i + 1] || '')) {
+      const table = el('table');
+      table.append(
+        el('thead', {}, el('tr', {}, ...cells(lines[i]).map((c) => el('th', { text: c }))))
+      );
+      i += 2;
+      const tbody = el('tbody');
+      while (i < lines.length && isRow(lines[i])) {
+        tbody.append(el('tr', {}, ...cells(lines[i]).map((c) => el('td', { text: c }))));
+        i++;
+      }
+      table.append(tbody);
+      root.append(table);
+      continue;
+    }
+
+    if (isUl(lines[i]) || isOl(lines[i])) {
+      const kind = isUl(lines[i]) ? isUl : isOl;
+      const list = el(isUl(lines[i]) ? 'ul' : 'ol');
+      while (i < lines.length && kind(lines[i])) {
+        const li = el('li');
+        li.append(inline(lines[i].replace(/^\s*(?:[-*]|\d+[.)])\s+/, '')));
+        list.append(li);
+        i++;
+      }
+      root.append(list);
+      continue;
+    }
+
+    // 普通段落：连续的非空、非列表行并成一段（段内换行保留成 <br>）
+    const p = el('p');
+    let first = true;
+    while (
+      i < lines.length &&
+      lines[i].trim() !== '' &&
+      !isRow(lines[i]) &&
+      !isUl(lines[i]) &&
+      !isOl(lines[i])
+    ) {
+      if (!first) p.append(document.createElement('br'));
+      p.append(inline(lines[i]));
+      first = false;
+      i++;
+    }
+    root.append(p);
+  }
+
+  return root;
+}
+
 function scrollToBottom() {
   $messages.scrollTop = $messages.scrollHeight;
 }
@@ -360,7 +490,9 @@ function addAgentMessage(data) {
   const col = el('div', { class: 'col' });
   const trace = renderTrace(data.tool_calls);
   if (trace) col.append(trace);
-  col.append(el('div', { class: 'bubble', text: data.reply }));
+  const bubble = el('div', { class: 'bubble rich' });
+  bubble.append(renderRich(data.reply));
+  col.append(bubble);
   const cards = renderCards(data.books);
   if (cards) col.append(cards);
   $messages.append(el('div', { class: 'row agent' }, col));
