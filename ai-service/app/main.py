@@ -13,15 +13,22 @@
 """
 
 import logging
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
+from langchain_core.messages import AIMessage, HumanMessage
 
-from app.clients.book_service import BookServiceError
+from app.agent.loop import chat_once
+from app.agent.tools import get_post_detail
+from app.clients.book_service import BookServiceError, load_history, save_messages
 from app.config import settings
 from app.schemas import (
     BatchItemResult,
+    BookCard,
     BookInfo,
+    ChatRequest,
+    ChatResponse,
     ExtractBatchRequest,
     ExtractBatchResponse,
     ExtractRequest,
@@ -308,4 +315,157 @@ def search(req: SearchRequest) -> SearchResponse:
             )
             for h in hits
         ],
+    )
+
+
+# ============================================================================
+# M3 第 4 步：对话
+# ============================================================================
+
+# 数据库 role 列 -> LangChain 的消息类。
+# 之所以能一行查表搞定，是因为建表时 role 存的就是 LangChain 自己的 .type 值
+# ("human" / "ai")，没有另创一套 user / assistant 的叫法（见 ChatMessage 类注释）。
+_ROLE_TO_CLASS = {"human": HumanMessage, "ai": AIMessage}
+
+
+def _rows_to_messages(rows: list[dict]) -> list:
+    """数据库行 -> LangChain 消息对象。给 chat_once 当 history 用。
+    """
+    result = []
+    for row in rows:
+        result.append(_ROLE_TO_CLASS[row["role"]](content = row["content"]))
+    return result
+
+
+def _messages_to_rows(messages: list) -> list[dict]:
+    """LangChain 消息对象 -> 数据库行。给 save_messages 用。
+    """
+    result = []
+    for message in messages:
+        result.append(
+            {
+                "role": message.type,
+                "content":message.content
+            }
+        )
+    return result
+
+
+def _collect_books(trace: list[dict]) -> list[BookCard]:
+    """这一轮工具碰到的书 -> 完整书卡。给前端渲染用。
+
+    为什么要这一步：`chat_once` 的 trace 里只有 `result_count`（几条），
+    而卡片要书名/版次/价格/成色/原帖。**数据在 loop 里被丢掉了** ——
+    所以让 trace 带上 `post_ids`，这里拿 id 回主服务补全。
+
+    两条设计取舍：
+      * **去重、保留首次出现的顺序**。模型可能先 search_books 拿到 5 个 id，
+        再 get_post_detail 查其中一本 —— 那本会出现两次，但只该有一张卡。
+      * **查不到的 id 直接跳过**，不补一张空卡。空卡（书名价格全空）比没有卡更难看，
+        而且它表达不了「这本书被删了」这个信息。
+    """
+    # 用 dict 而非 set：要保留插入顺序（set 是无序的，卡片顺序会随机跳）
+    ids: dict[int, BookCard] = {}
+
+    for record in trace:
+        for post_id in record.get("post_ids", []):
+            if post_id in ids:
+                continue
+            # 复用 get_post_detail —— 它已经把主服务的原始字段翻译过了
+            # （price 的 null -> "未标价"、hasNotes 的 null -> "未提及"、status 转中文）。
+            # 这里要是自己再调一次 get_post() 再翻译一遍，那套口径就有了两份，
+            # 改一处漏一处是迟早的事。
+            rows = get_post_detail.invoke({"post_id": post_id})
+            if not rows:
+                continue  # 主服务说这条不存在（或已删），跳过而不是造空卡
+            row = rows[0]
+            ids[post_id] = BookCard(
+                post_id=row["post_id"],
+                book_name=row.get("book_name"),
+                edition=row.get("edition"),
+                price=row["price"],
+                condition_desc=row.get("condition_desc"),
+                raw_text=row.get("raw_text"),
+                status=row.get("status", "状态未知"),
+            )
+
+    return list(ids.values())
+
+
+@app.post(
+    "/chat",
+    response_model=ChatResponse,
+    tags=["对话"],
+    summary="和 agent 对话（带会话记忆）",
+    description="""
+用户说一句，agent 自己决定要不要查库、查几次，然后回答。
+
+## 记忆怎么工作
+
+请求里**不传 `session_id` 就是开一个新会话**，服务端生成后放在响应里返回。
+前端存住它，下一句带上 —— 这样 agent 才知道「第一条多少钱」问的是哪一批书。
+
+历史存在**主服务的 MySQL** 里（`chat_message` 表），本服务每次通过 REST 读写。
+不直连数据库是铁律一：本服务要能随便重启、随便扩多副本，不持有任何业务数据连接。
+
+## 每一轮只存两条
+
+agent 一轮跑完，`chat_once` 返回的是**整段会话**（旧历史 + 新两条）。
+不能整个存回去 —— 旧历史已经在库里了，整个存会一轮比一轮重复。
+只切出尾巴上那两条，**一次 POST 提交**（主服务那边一个事务写，不会出现有问无答）。
+
+## `tool_calls` 为什么要暴露
+
+这是整个项目最直观的加分项。只有 `reply` 的话，看的人分不清
+「agent 自己决定查了库」和「硬编码了一段回答」。
+把轨迹摊开，才能证明它真的在决策 —— 演示和排查都靠这一栏。
+
+## `books` 是怎么来的
+
+**不是模型给的，是服务端补的。** 模型只输出文字，卡片要的书名/版次/价格/成色/原帖
+它一个字都不会给你。
+
+流程是：工具返回的书 id 由 trace 带出来（`tool_calls[].post_ids`）→ 这里去重 →
+按 id 回主服务取全量字段 → 组装成 `books`。
+
+`tool_calls` 里只有 `result_count`（几条）是不够的：`search_books` 返回的摘要
+只有书名/价格/有没有笔记三栏，做不了卡片。**而且只调 `search_books` 时
+`arguments` 里没有 post_id**，前端没法自己补 —— 所以只能由服务端带出来。
+""",
+    response_description="agent 的回答 + 这一轮的工具调用轨迹 + 涉及到的书卡",
+    responses={
+        400: {"description": "message 为空，或 session_id 形状不合法"},
+        503: {"description": "主服务不可用（读写历史失败）"},
+    },
+)
+def chat(req: ChatRequest) -> ChatResponse:
+    # 不传就是新会话。uuid4().hex 只含字母数字，
+    # 正好落在 session_id 允许的字符集里（见 ChatRequest.session_id 的说明）。
+    session_id = req.session_id or uuid.uuid4().hex
+
+    try:
+        # ---- 1. 读这个会话之前说过的话 ----------------------------------
+        history = _rows_to_messages(load_history(session_id))
+
+        # ---- 2. 跑一轮 agent --------------------------------------------
+        reply, trace, memory = chat_once(req.message, history)
+
+        # ---- 3. 把这一轮碰到的书补全成卡片 -------------------------------
+        # 放在同一个 try 里、save_messages 之前：补卡片也要打主服务，
+        # 主服务挂了的话第 4 步本来也存不了历史、照样 503 —— 不用单独兜。
+        books = _collect_books(trace)
+
+        # ---- 4. 只存这一轮新产生的那两条 ---------------------------------
+        # chat_once 返回的第三个值是**整段会话**，但旧历史已经在库里了，
+        # 整个存回去会一轮比一轮重复。只切尾巴上那两条，一次 POST 提交。
+        new_history = memory[-2:]
+        save_messages(session_id, _messages_to_rows(new_history))
+
+    except BookServiceError as e:
+        # 主服务连不上 —— 这是下游故障，不是调用方的错，所以 503 而不是 400。
+        # 消息原样带出去：BookServiceError 里已经写了「确认 Spring Boot 已启动」这类提示。
+        raise HTTPException(status_code=503, detail=str(e))
+
+    return ChatResponse(
+        session_id=session_id, reply=reply, tool_calls=trace, books=books
     )

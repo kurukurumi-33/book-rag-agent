@@ -7,7 +7,7 @@ Java 侧通过 @JsonProperty 做映射，两边各用各的习惯。
 直接显示在 Swagger UI 的字段说明里。**改说明等于改文档**，不用另写一份。
 """
 
-from typing import Optional
+from typing import Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -297,3 +297,125 @@ class SearchResponse(BaseModel):
     )
     count: int = Field(description="过滤后的命中数。可能为 0，这是正常结果不是错误")
     hits: list[SearchHit]
+
+
+# ============================================================================
+# M3 第 4 步：会话接口
+# ============================================================================
+
+
+class ChatRequest(BaseModel):
+    """对话请求。"""
+
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"message": "有笔记的线代成色怎么样"}}
+    )
+
+    message: str = Field(
+        min_length=1,
+        description="用户这一句原话",
+        examples=["有笔记的线代成色怎么样"],
+    )
+    session_id: Optional[str] = Field(
+        default=None,
+        # ⚠️ 必须自己锚定 ^...$。Pydantic 的 pattern 是**子串匹配**：
+        #    写成 [A-Za-z0-9_-]{1,64} 的话，"a/b c" 里含一个 a 就算通过，
+        #    整个约束形同虚设。实测过。
+        pattern=r"^[A-Za-z0-9_-]{1,64}$",
+        description=(
+            "会话 ID。**不传就开一个新会话**，服务端生成后放在响应里返回；"
+            "前端存下来、下一句带上，agent 就有记忆了。"
+            "形状跟主服务 chat_message.session_id 列对齐（也是 VARCHAR(64)），"
+            "因为它是会拼进 URL 路径的：带斜杠的会被路由拆开，"
+            "带空格的编码后会被 Tomcat 直接拒掉。"
+        ),
+    )
+
+
+class ToolCallRecord(BaseModel):
+    """这一轮 agent 调了一次工具的记录。"""
+
+    name: str = Field(description="工具名", examples=["search_books"])
+    arguments: dict = Field(
+        description="模型自己拆出来的参数。看这一栏能判断它是真会调、还是把整句话当 query 塞进去",
+        examples=[{"query": "线性代数", "has_notes": True}],
+    )
+    result_count: int = Field(description="工具返回了几条。0 也是有效结果（没找到）", examples=[5])
+    post_ids: list[int] = Field(
+        default_factory=list,
+        description=(
+            "这次工具返回的书 id。**卡片的数据入口** —— search_books 的摘要只有"
+            "书名/价格/有没有笔记三栏，做不了卡片；靠这批 id 回主服务补全成 books。"
+            "失败路径（幻觉工具名 / 工具报错）给空列表，不是缺字段。"
+        ),
+        examples=[[139, 133, 124, 98, 85]],
+    )
+
+
+class BookCard(BaseModel):
+    """一张书卡。给前端渲染用 —— 字段口径跟 `get_post_detail` 返回的完全一致。
+
+    ⚠️ `price` / `has_notes` 是**联合类型**，不是可选：源头分不清的事出口不替它下结论。
+    `price` 为 null 时给 `"未标价"`（不是 "面议" —— 那是在替卖家承诺可以还价），
+    `has_notes` 为 null 时给 `"未提及"`（不是 False —— 那是替卖家撒谎说没有笔记）。
+    """
+
+    post_id: int = Field(description="帖子 id，点卡片跳详情用")
+    book_name: Optional[str] = Field(default=None, description="书名")
+    edition: Optional[str] = Field(default=None, description="版次，如「第六版」")
+    price: Union[float, str] = Field(
+        description="价格。数字，或字符串 `未标价`（源头没标价，不是 0）", examples=[8.0]
+    )
+    condition_desc: Optional[str] = Field(
+        default=None, description="成色描述，卖家自己的说法"
+    )
+    raw_text: Optional[str] = Field(default=None, description="卖家原帖原文")
+    status: str = Field(default="状态未知", description="在售 / 已售 / ...")
+
+
+class ChatResponse(BaseModel):
+    """对话响应。"""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "session_id": "6f1c0e6a9b3d4e2f8a7c5b1d0e3f4a6b",
+                "reply": "139 号《线性代数》有笔记且划过重点，8 元，还在售。",
+                "tool_calls": [
+                    {"name": "search_books",
+                     "arguments": {"query": "线性代数", "has_notes": True},
+                     "result_count": 5,
+                     "post_ids": [139, 133, 124, 98, 85]},
+                    {"name": "get_post_detail",
+                     "arguments": {"post_id": 139},
+                     "result_count": 1,
+                     "post_ids": [139]},
+                ],
+                "books": [
+                    {"post_id": 139, "book_name": "线性代数", "edition": "第六版",
+                     "price": 8.0, "condition_desc": "有笔记，划过重点",
+                     "raw_text": "线代 同济六版 8块 有笔记 划重点", "status": "在售"}
+                ],
+            }
+        }
+    )
+
+    session_id: str = Field(
+        description="会话 ID。首次调用时由服务端生成，之后原样带回 —— 前端要存住它，否则没有记忆"
+    )
+    reply: str = Field(description="给用户看的回答")
+    tool_calls: list[ToolCallRecord] = Field(
+        default_factory=list,
+        description=(
+            "这一轮的工具调用轨迹。**必须暴露出来**：只有 reply 的话，"
+            "看不出它是真 agent 还是硬编码的问答。演示和排查都靠这一栏。"
+        ),
+    )
+    books: list[BookCard] = Field(
+        default_factory=list,
+        description=(
+            "这一轮涉及到的书，给前端渲染卡片用。**不是模型给的，是服务端补的** ——"
+            "从 tool_calls 里收集 post_ids，去重后回主服务取全量字段。"
+            "模型一句没找到就是空列表。"
+        ),
+    )

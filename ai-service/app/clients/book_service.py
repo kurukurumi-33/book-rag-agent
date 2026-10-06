@@ -16,6 +16,8 @@ AI 服务是**无状态的纯函数**——不持有数据库连接、不在本�
 代价是查详情多一次 HTTP —— 220 条数据的场景完全划算。
 """
 
+import re
+
 import httpx
 
 from app.config import settings
@@ -33,10 +35,18 @@ class BookServiceError(RuntimeError):
     """
 
 
-def _get(path: str, params: dict | None = None):
+def _request(method: str, path: str, *, params: dict | None = None, json_body=None):
+    """给主服务发一个请求，统一处理错误。
+
+    GET / POST 共用这一份错误处理。分开写的话，每加一个动词就要把
+    「区分 HTTPStatusError 和 HTTPError」那段抄一遍 —— 抄漏一处就少一种错误提示，
+    而且报错文案会各写各的。
+    """
     url = f"{settings.book_service_url}{path}"
     try:
-        resp = httpx.get(url, params=params, timeout=DEFAULT_TIMEOUT)
+        resp = httpx.request(
+            method, url, params=params, json=json_body, timeout=DEFAULT_TIMEOUT
+        )
         resp.raise_for_status()
     except httpx.HTTPStatusError as e:
         raise BookServiceError(
@@ -49,7 +59,23 @@ def _get(path: str, params: dict | None = None):
             f"连不上主服务 {url}（{type(e).__name__}: {e}）。"
             f"确认 Spring Boot 已启动、端口是 8080、book_service_url 用的是 127.0.0.1。"
         ) from e
+
+    # ⚠️ Spring 的 @RestController 方法返回 null 时，响应是 **200 + 空体**，
+    #    不是 JSON 的 `null`（实测：Content-Length: 0）。直接 resp.json() 会抛
+    #    JSONDecodeError —— 那是 ValueError 的子类，**不被上面的 httpx.HTTPError 兜住**，
+    #    会一路炸到调用方。所以这里必须先判空。
+    if not resp.content.strip():
+        return None
+
     return resp.json()
+
+
+def _get(path: str, params: dict | None = None):
+    return _request("GET", path, params=params)
+
+
+def _post(path: str, json_body):
+    return _request("POST", path, json_body=json_body)
 
 
 def fetch_posts(extract_status: str | None = "DONE", limit: int = 500) -> list[dict]:
@@ -68,5 +94,63 @@ def fetch_posts(extract_status: str | None = "DONE", limit: int = 500) -> list[d
 
 
 def get_post(post_id: int) -> dict | None:
-    """按 id 取单条帖子详情。查不到时主服务返回 JSON null。"""
+    """按 id 取单条帖子详情。查不到时返回 None（主服务回的是 200 + 空体）。"""
     return _get(f"/api/posts/{post_id}")
+
+
+# ============================================================================
+# 会话历史（M3 第 4 步）
+#
+# 这两个函数是「会话记忆存在 MySQL」这件事在 Python 侧的全部。
+# loop.py 里的 chat_once **不知道**它们存在 —— 它只负责算出新历史，
+# 存哪、怎么存是调用方（POST /chat 那个接口）的事。
+# ============================================================================
+
+
+# 允许的 session_id 形状：字母 / 数字 / 下划线 / 连字符，最长 64。
+# 跟主服务那张表的 VARCHAR(64) 对齐。
+_SESSION_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def _chat_path(session_id: str) -> str:
+    """拼会话的 URL 路径，顺便把 session_id 挡在合法字符集内。
+
+    session_id 会拼进 URL 的**路径段**，而路径段装不下任意用户输入：
+
+        "a/b c"  ->  编码成 "a%2Fb%20c"  ->  Tomcat 直接回 400
+                     （容器默认拒绝路径里的 %2F，防目录穿越，Spring 根本看不到）
+        "a/b"    ->  不编码的话路由被拆成 /api/chat/a/b/messages，匹配不上
+
+    试过 quote() 转义，没用 —— 转义后照样被容器拒。所以这里的结论是
+    **约束字符集**，而不是「想办法转义」。我们自己的会话 ID 是 uuid4().hex，
+    本来就只含字母数字；约束住它，这一类问题就整体消失了。
+
+    主服务那边有同样的正则做二道防线（这里没挡住的话，那边回 400）。
+    """
+    if not _SESSION_ID_RE.fullmatch(session_id):
+        raise ValueError(
+            f"session_id 只能是字母/数字/下划线/连字符，最长 64 位，收到 {session_id!r}"
+        )
+    return f"/api/chat/{session_id}/messages"
+
+
+def load_history(session_id: str, limit: int = 20) -> list[dict]:
+    """取某个会话最近的消息，**按时间正序**（最老的在前），可以直接拼进 messages。
+
+    返回形如 [{"role": "human", "content": "有高数吗", ...}, ...]
+
+    取多少条由 limit 决定，主服务那边会截断到 200。这是**有意的截断**：
+    会话可以无限长，全量读回来会把模型的上下文窗口撑爆。
+    """
+    return _get(_chat_path(session_id), {"limit": limit}) or []
+
+
+def save_messages(session_id: str, messages: list[dict]) -> list[dict]:
+    """把**一轮**产生的消息一次写进去。
+
+    messages 形如 [{"role": "human", "content": "..."}, {"role": "ai", "content": "..."}]
+
+    ⚠️ 一定要**一次提交整轮**，不要拆成两次调用。主服务那边用同一个事务写，
+    拆开的话两个请求之间进程一挂，库里就只剩问、没有答，下一轮接不上话。
+    """
+    return _post(_chat_path(session_id), messages) or []
