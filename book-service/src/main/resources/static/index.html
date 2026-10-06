@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>二手书导购助手</title>
+<!--
+  一个文件就是一个前端。没有构建步骤、没有 npm、没有框架。
+
+  为什么不上 React/Vue：这一页要做的事只有「发一个请求、把 JSON 渲染出来」，
+  引入构建工具链会让整个项目多出一套 node_modules 和一个必须记得跑的
+  build 命令，而它对演示的东西（agent 会不会自己调工具）没有任何帮助。
+
+  放在 resources/static/ 下 —— Spring Boot 会自动把它挂到根路径，
+  于是 http://localhost:8080 直接就是这一页。**跟接口同源**，
+  所以 fetch 不用写完整 URL，也不存在跨域。
+-->
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --panel: #ffffff;
+    --line: #e3e5e9;
+    --text: #1f2328;
+    --muted: #6b7280;
+    --accent: #2563eb;
+    --accent-soft: #eff4ff;
+    --danger: #b42318;
+    --danger-soft: #fef3f2;
+    --ok: #067647;
+    --ok-soft: #ecfdf3;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+
+  header {
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    padding: 14px 20px;
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex: none;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .hint { color: var(--muted); font-size: 13px; }
+
+  /* 消息区：唯一的滚动容器。撑满剩余高度，新消息进来时滚到底 */
+  #messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+
+  .row { display: flex; }
+  .row.user { justify-content: flex-end; }
+
+  .bubble {
+    max-width: min(680px, 85%);
+    padding: 10px 14px;
+    border-radius: 12px;
+    white-space: pre-wrap;   /* reply 里可能有换行，原样显示 */
+    word-break: break-word;
+  }
+  .row.user .bubble {
+    background: var(--accent);
+    color: #fff;
+    border-bottom-right-radius: 3px;
+  }
+  .row.agent .bubble {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-bottom-left-radius: 3px;
+  }
+  .row.agent .col { max-width: min(680px, 85%); display: flex; flex-direction: column; gap: 10px; }
+  .row.agent .bubble { max-width: 100%; }
+
+  /* ---- 工具调用轨迹 ---- */
+  .trace {
+    background: var(--accent-soft);
+    border: 1px solid #d3e0fb;
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 13px;
+  }
+  .trace h3 {
+    margin: 0 0 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent);
+    letter-spacing: .02em;
+  }
+  .trace ol { margin: 0; padding-left: 18px; }
+  .trace li { margin: 3px 0; }
+  .trace code {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 12px;
+    background: #fff;
+    border: 1px solid #d3e0fb;
+    border-radius: 4px;
+    padding: 0 4px;
+  }
+  .trace .meta { color: var(--muted); }
+
+  /* ---- 书卡 ---- */
+  .cards { display: flex; flex-direction: column; gap: 8px; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .card .top { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .card .name { font-weight: 600; }
+  .card .edition { color: var(--muted); font-size: 13px; }
+  .card .price {
+    margin-left: auto;
+    color: var(--danger);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .card .cond { margin-top: 4px; font-size: 13px; color: #374151; }
+  .card .raw {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--line);
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .card .raw .label { color: #9ca3af; }
+  .badge {
+    font-size: 11px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    color: var(--muted);
+  }
+  .badge.on { color: var(--ok); background: var(--ok-soft); border-color: #abefc6; }
+
+  /* ---- 错误 ---- */
+  .error {
+    background: var(--danger-soft);
+    border: 1px solid #fecdca;
+    border-radius: 12px;
+    padding: 12px 14px;
+    color: var(--danger);
+    max-width: min(680px, 85%);
+  }
+  .error .title { font-weight: 600; margin-bottom: 4px; }
+  .error .detail {
+    font-size: 13px;
+    color: #7a271a;
+    word-break: break-word;
+    white-space: pre-wrap;
+  }
+  .error .fix {
+    margin-top: 8px;
+    font-size: 13px;
+    background: #fff;
+    border-radius: 8px;
+    padding: 8px 10px;
+    color: #7a271a;
+    font-family: ui-monospace, Consolas, monospace;
+    white-space: pre-wrap;
+  }
+
+  /* ---- 等待中 ---- */
+  .typing { color: var(--muted); font-size: 13px; }
+  .typing::after {
+    content: "";
+    animation: dots 1.2s steps(4, end) infinite;
+  }
+  @keyframes dots {
+    0%   { content: ""; }
+    25%  { content: "."; }
+    50%  { content: ".."; }
+    75%  { content: "..."; }
+  }
+
+  /* ---- 输入区 ---- */
+  footer {
+    flex: none;
+    background: var(--panel);
+    border-top: 1px solid var(--line);
+    padding: 12px 20px 16px;
+  }
+  form { display: flex; gap: 10px; max-width: 900px; margin: 0 auto; }
+  textarea {
+    flex: 1;
+    resize: none;
+    font: inherit;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    outline: none;
+    max-height: 140px;
+  }
+  textarea:focus { border-color: var(--accent); }
+  button {
+    font: inherit;
+    padding: 0 20px;
+    border: 0;
+    border-radius: 10px;
+    background: var(--accent);
+    color: #fff;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  button:disabled { background: #c7cdd6; cursor: not-allowed; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>二手书导购助手</h1>
+  <span class="hint">试试：「有笔记的线代成色怎么样」</span>
+</header>
+
+<main id="messages"></main>
+
+<footer>
+  <form id="composer">
+    <textarea id="input" rows="1" placeholder="想问什么？（Enter 发送，Shift+Enter 换行）" autofocus></textarea>
+    <button id="send" type="submit">发送</button>
+  </form>
+</footer>
+
+<script>
+// ============================================================================
+// 状态
+// ============================================================================
+
+/**
+ * 会话 ID。**只在内存里**，刷新页面就没了 —— 这是故意的。
+ *
+ * 存 localStorage 的话，刷新后 agent 还记着上一轮翻过的书，
+ * 演示时很容易搞混「它记住了」和「它又查了一遍」。
+ * 想跨刷新保留，把这两处换成 localStorage 就行。
+ *
+ * 首次是 null：请求体里不传 session_id，AI 服务开一个新会话、
+ * 在响应里把生成好的 id 返回，这里接住。
+ */
+let sessionId = null;
+
+/** 请求进行中 —— 用它禁用发送，避免连点发出一堆并发的 agent 循环。 */
+let busy = false;
+
+const $messages = document.getElementById('messages');
+const $input = document.getElementById('input');
+const $send = document.getElementById('send');
+
+// ============================================================================
+// DOM 小工具
+//
+// 所有数据都走 textContent，**全程不用 innerHTML 拼字符串**。
+// 卡片里的「卖家原帖」是数据库里用户自己发布的文本，
+// 直接拼进 innerHTML 等于把 XSS 的入口开在自己家门口。
+// ============================================================================
+
+/** el('div', {class: 'x'}, child1, child2) —— 建元素的小工具。 */
+function el(tag, attrs, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs || {})) {
+    if (key === 'text') node.textContent = value;
+    else node.setAttribute(key, value);
+  }
+  for (const child of children) {
+    if (child != null) node.append(child);
+  }
+  return node;
+}
+
+function scrollToBottom() {
+  $messages.scrollTop = $messages.scrollHeight;
+}
+
+// ============================================================================
+// 渲染
+// ============================================================================
+
+function addUserMessage(text) {
+  $messages.append(
+    el('div', { class: 'row user' }, el('div', { class: 'bubble', text: text }))
+  );
+  scrollToBottom();
+}
+
+/**
+ * 工具调用轨迹。
+ *
+ * 这一栏是**演示里的主角**：只有回答的话，看的人分不清
+ * 「agent 自己决定查了库」和「硬编码了一段文字」。
+ * 把每次调用的名字、参数、拿到几条摊开，才是它真的在决策的证据。
+ */
+function renderTrace(toolCalls) {
+  if (!toolCalls || toolCalls.length === 0) return null;
+
+  const items = toolCalls.map((call) =>
+    el('li', {},
+      el('code', { text: call.name }),
+      el('span', { class: 'meta', text: '(' + JSON.stringify(call.arguments) + ') → ' }),
+      el('span', { text: call.result_count + ' 条' })
+    )
+  );
+
+  return el('div', { class: 'trace' },
+    el('h3', { text: '🔧 Agent 的工具调用（' + toolCalls.length + ' 次）' }),
+    el('ol', {}, ...items)
+  );
+}
+
+/**
+ * 书卡。
+ *
+ * `price` 可能是数字、也可能是字符串「未标价」——
+ * 这是 AI 服务有意为之（源头没标价 ≠ 标了 0 元），前端照原样显示即可，
+ * 不要自作主张把它变成 0 或者「面议」。
+ */
+function renderCards(books) {
+  if (!books || books.length === 0) return null;
+
+  const cards = books.map((book) => {
+    const top = el('div', { class: 'top' },
+      el('span', { class: 'name', text: book.book_name || '（未抽出书名）' })
+    );
+    if (book.edition) top.append(el('span', { class: 'edition', text: book.edition }));
+    top.append(el('span', { class: 'badge' + (book.status === '在售' ? ' on' : ''), text: book.status || '状态未知' }));
+    // price 是数字时补个「元」，是「未标价」这种字符串时原样显示
+    top.append(el('span', { class: 'price', text: typeof book.price === 'number' ? book.price + ' 元' : book.price }));
+
+    const card = el('div', { class: 'card' }, top);
+    if (book.condition_desc) {
+      card.append(el('div', { class: 'cond', text: '成色：' + book.condition_desc }));
+    }
+    if (book.raw_text) {
+      card.append(el('div', { class: 'raw' },
+        el('span', { class: 'label', text: '原帖 #' + book.post_id + '：' }),
+        el('span', { text: book.raw_text })
+      ));
+    }
+    return card;
+  });
+
+  return el('div', { class: 'cards' }, ...cards);
+}
+
+function addAgentMessage(data) {
+  const col = el('div', { class: 'col' });
+  const trace = renderTrace(data.tool_calls);
+  if (trace) col.append(trace);
+  col.append(el('div', { class: 'bubble', text: data.reply }));
+  const cards = renderCards(data.books);
+  if (cards) col.append(cards);
+  $messages.append(el('div', { class: 'row agent' }, col));
+  scrollToBottom();
+}
+
+/**
+ * 错误提示。
+ *
+ * 白屏是最糟的失败方式 —— 用户看不出是「服务没启动」还是「代码写错了」。
+ * 所以这里把状态码和响应体里的原文都摆出来，并针对 503 给一句能直接照做的提示。
+ */
+function addErrorMessage(title, detail, fix) {
+  const box = el('div', { class: 'error' },
+    el('div', { class: 'title', text: title })
+  );
+  if (detail) box.append(el('div', { class: 'detail', text: detail }));
+  if (fix) box.append(el('div', { class: 'fix', text: fix }));
+  $messages.append(el('div', { class: 'row agent' }, box));
+  scrollToBottom();
+}
+
+function showTyping() {
+  const node = el('div', { class: 'row agent' },
+    el('div', { class: 'bubble' }, el('span', { class: 'typing', text: 'Agent 正在思考' })));
+  $messages.append(node);
+  scrollToBottom();
+  return node;
+}
+
+// ============================================================================
+// 发送
+// ============================================================================
+
+async function send(text) {
+  if (busy || !text) return;
+  busy = true;
+  $send.disabled = true;
+  $input.value = '';
+
+  addUserMessage(text);
+  const typing = showTyping();
+
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // session_id 为 null 时照样发出去 —— 这就是「开新会话」的信号，
+      // 后端生成一个返回，下面接住。
+      body: JSON.stringify({ message: text, session_id: sessionId })
+    });
+
+    // 错误响应体也是 JSON（见 GlobalExceptionHandler 的 {error, detail}），
+    // 所以统一按 JSON 解析，不管成功失败。
+    const data = await res.json().catch(() => null);
+
+    if (!res.ok) {
+      // 主服务的错误体是 {error, detail}（见 GlobalExceptionHandler），
+      // error 是一句概括（「请求参数不合法」），detail 是具体原因
+      // （「message 不能为空」）。标题用它俩，别再显示英文的 "Bad Request"。
+      if (res.status === 503) {
+        addErrorMessage(
+          (data && data.error) || 'AI 服务没启动',
+          (data && data.detail) || res.statusText,
+          '在 ai-service 目录下执行：\n'
+          + './.venv/Scripts/python.exe -m uvicorn app.main:app --port 8000'
+        );
+      } else {
+        addErrorMessage(
+          (data && data.error) || ('请求失败（HTTP ' + res.status + '）'),
+          (data && data.detail) || JSON.stringify(data) || res.statusText
+        );
+      }
+      return;
+    }
+
+    // 首次对话时 AI 服务才把新会话的 id 发过来，存住它，下一句带上。
+    if (data && data.session_id) sessionId = data.session_id;
+    addAgentMessage(data || {});
+
+  } catch (err) {
+    // fetch 自己抛异常 = 连主服务都没连上（Spring Boot 没起、或者页面是 file:// 打开的）。
+    addErrorMessage(
+      '连不上主服务',
+      String(err),
+      '确认页面是从 http://localhost:8080 打开的，且 Spring Boot 已启动。'
+    );
+  } finally {
+    typing.remove();
+    busy = false;
+    $send.disabled = false;
+    $input.focus();
+  }
+}
+
+// ============================================================================
+// 事件
+// ============================================================================
+
+document.getElementById('composer').addEventListener('submit', (e) => {
+  e.preventDefault();          // 不刷新页面 —— 刷新会把 sessionId 一起丢掉
+  send($input.value.trim());
+});
+
+$input.addEventListener('keydown', (e) => {
+  // Enter 发送，Shift+Enter 换行（聊天框的通用习惯）
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    send($input.value.trim());
+  }
+});
+</script>
+</body>
+</html>

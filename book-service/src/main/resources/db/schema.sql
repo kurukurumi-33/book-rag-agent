@@ -39,3 +39,29 @@ CREATE TABLE book_post (
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COMMENT = '二手书帖子';
+
+
+-- ============================================================================
+-- M3 第 4 步：Agent 的会话历史
+-- ============================================================================
+
+DROP TABLE IF EXISTS chat_message;
+
+CREATE TABLE chat_message (
+    id          BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
+    session_id  VARCHAR(64)  NOT NULL                COMMENT '会话 ID，由 AI 服务生成',
+    role        VARCHAR(16)  NOT NULL                COMMENT 'human=用户说的 / ai=模型的最终回答',
+    content     TEXT         NOT NULL                COMMENT '消息正文',
+    created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id),
+    -- 查询永远是「某会话最近 N 条，按顺序」。id 自增即顺序，
+    -- 所以把两者放一个联合索引里：先按 session_id 定位，再靠 id 直接有序取。
+    KEY idx_session_id_id (session_id, id)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = 'Agent 会话历史';
+
+-- 为什么用自增 id 当顺序，而不另加一个 seq：
+-- 一轮的两条消息是一次事务写进去的，自增 id 天然保证它们相邻且有序。
+-- 另加 seq 就得自己维护「这个会话下一条是几」，还要处理并发写同一个会话 —— 白给自己找事。
