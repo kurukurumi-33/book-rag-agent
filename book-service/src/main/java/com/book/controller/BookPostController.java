@@ -39,11 +39,29 @@ public class BookPostController {
                     按铁律一，AI 服务不直连数据库，业务数据一律从这里走。
 
                     所以这个参数不是给前端用的，是**给 AI 服务用的**。
+
+                    ## 为什么有 `offset`
+
+                    `limit` 一直在 500 封顶，于是有个当时没暴露的硬伤：
+                    **第 501 条以后的帖子根本取不到**。220 条语料时无所谓，
+                    扩到 1 万条之后建索引就只会索引到最新的 500 条。
+
+                    两种修法：
+                      * 直接把上限提到 2 万 —— 一个请求返回上万行 JSON，
+                        内存峰值高、超时风险大，而且以后再加语料还得再提一次
+                      * **加 offset 翻页**（选了这条）：单次请求的体量不变，
+                        调用方循环翻，语料涨到多少都不用再动这里
+
+                    翻页期间按 id 倒序**必须稳定** —— 中途有人插入新帖子会让
+                    offset 错位、漏掉几条。建索引是开发期的一次性动作，
+                    没有并发写，这个前提成立。（真要在线翻页得用游标：`id < 上一页最后一个 id`。）
                     """
     )
     public List<BookPost> list(
             @Parameter(description = "返回条数，默认 50，上限 500")
             @RequestParam(defaultValue = "50") int limit,
+            @Parameter(description = "跳过前多少条，默认 0。建索引时 AI 服务靠它翻页")
+            @RequestParam(defaultValue = "0") int offset,
             @Parameter(description = "按抽取状态过滤：PENDING / DONE / FAILED；不传返回全部")
             @RequestParam(required = false) String extractStatus) {
         return bookPostService.list(
@@ -51,7 +69,9 @@ public class BookPostController {
                         .eq(extractStatus != null && !extractStatus.isBlank(),
                                 BookPost::getExtractStatus, extractStatus)
                         .orderByDesc(BookPost::getId)
-                        .last("LIMIT " + Math.min(limit, 500))
+                        // LIMIT 和 OFFSET 都夹了下界：Math.max 挡负数。
+                        // MySQL 的 OFFSET 不吃负数，传 -1 进去是语法错，不是「返回全部」。
+                        .last("LIMIT " + Math.min(limit, 500) + " OFFSET " + Math.max(offset, 0))
         );
     }
 

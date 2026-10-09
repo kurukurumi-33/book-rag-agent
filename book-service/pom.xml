@@ -15,7 +15,7 @@
     <artifactId>book-service</artifactId>
     <version>0.0.1-SNAPSHOT</version>
     <name>book-service</name>
-    <description>二手书智能匹配 - 主服务</description>
+    <description>智觅（二手书智能匹配 Agent） - 主服务</description>
 
     <properties>
         <java.version>24</java.version>

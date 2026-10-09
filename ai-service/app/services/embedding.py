@@ -19,8 +19,11 @@
 我们的场景是短 query 检索短文档，所以不加。）
 """
 
+from __future__ import annotations
+
 import os
 import threading
+from typing import TYPE_CHECKING
 
 # ⚠️ 必须在 import sentence_transformers **之前** 设好环境变量：
 # huggingface_hub 是在被 import 的那一刻读 HF_ENDPOINT 的，
@@ -30,7 +33,9 @@ import threading
 # 仍会去 huggingface.co 探一遍版本，连不上就重试 5 次、白等 ~25 秒。
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
-from sentence_transformers import SentenceTransformer  # noqa: E402
+# sentence_transformers 只在**类型检查时**可见，运行时不 import —— 原因见 get_model()
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
 
 from app.config import settings
 
@@ -59,6 +64,16 @@ def get_model() -> SentenceTransformer:
             # 双重检查：抢到锁之后要再看一眼，
             # 因为可能已经有别的线程加载完了
             if _model is None:
+                # ⚠️ 延迟到**这里**才 import，不放在模块顶层。
+                #
+                # 光 `import torch` 就要 ~1.7s，冷启动更久。放在顶层的话，
+                # 任何 `import app.services.embedding` 的代码都要背这个代价 ——
+                # 包括跑单元测试（实测全套单测从 34s 降到 2s 就是这样来的）。
+                #
+                # 顺序仍然安全：上面的 HF_ENDPOINT 在**模块加载时**就设好了，
+                # 而这里才第一次触发 huggingface_hub 的 import。
+                from sentence_transformers import SentenceTransformer
+
                 _model = SentenceTransformer(settings.embedding_model)
     return _model
 

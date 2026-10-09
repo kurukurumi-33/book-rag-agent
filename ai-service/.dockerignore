@@ -1,0 +1,32 @@
+# 构建上下文里不该出现的东西。
+#
+# 为什么认真写这个而不是「反正 COPY 只拷 app/ 和 scripts/」：
+#   构建上下文是**整个目录**打包发给 Docker daemon 的 ——
+#   就算 Dockerfile 不 COPY，.venv/ 和 models/ 也会被打包传输一遍。
+#   本机的 .venv 有几个 GB、models/ 有 1.2GB，不加这个文件，
+#   每次 build 都要白传一遍，慢到以为卡死了。
+
+# 虚拟环境 —— 容器里会重新装，本机的是 Windows 版，拷进去也没用
+.venv/
+
+# 模型权重 —— 1.2GB，用 volume 挂载（见 docker-compose.yml），不烤进镜像
+models/
+
+# 向量库 —— 运行时产物，本地跑出来的和容器里的不该混
+data/
+
+# 私有配置：**绝对不能进镜像**（里面有 API key）
+.env
+.env.local
+application-local.yml
+
+# 测试与缓存
+tests/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# 开发工具
+.vscode/
+.idea/
+*.log

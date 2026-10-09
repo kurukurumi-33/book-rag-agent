@@ -122,6 +122,17 @@ class ExtractBatchRequest(BaseModel):
         ge=1,
         description="最大并发数。太小慢，太大会被对方 API 限流（429）",
     )
+    batch_size: int = Field(
+        default=20,
+        ge=1,
+        le=50,
+        description=(
+            "一次 LLM 请求里塞几条帖子。"
+            "1 = 逐条抽取（每条都重发一遍 system prompt，token 最贵，但失败粒度最细）；"
+            ">1 = 真批量，system prompt 每 N 条才发一次。"
+            "默认 20 可把 token 降到约 1/6，代价是一个 chunk 失败会带走这一整批。"
+        ),
+    )
 
 
 class BatchItemResult(BaseModel):
@@ -162,10 +173,13 @@ class IndexBuildRequest(BaseModel):
     )
 
     limit: int = Field(
-        default=500,
+        default=20000,
         ge=1,
-        le=500,
-        description="最多从主服务拉多少条帖子。上限 500 是主服务那边的截断值",
+        le=100000,
+        description=(
+            "最多建多少条。默认 20000 当「全量」用。"
+            "**不是主服务的那个 500** —— 客户端会按 500 一页翻，总数由这里定。"
+        ),
     )
     rebuild: bool = Field(
         default=False,
@@ -184,12 +198,12 @@ class IndexBuildResponse(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "fetched": 220,
-                "indexed": 220,
-                "skipped": 0,
-                "collection_count": 220,
+                "fetched": 10000,
+                "indexed": 9997,
+                "skipped": 3,
+                "collection_count": 9997,
                 "dim": 512,
-                "elapsed_ms": 4210,
+                "elapsed_ms": 22913,
             }
         }
     )
@@ -228,7 +242,15 @@ class SearchRequest(BaseModel):
         description=(
             "相似度下限，低于它的丢掉。不传则用服务端的默认阈值。"
             "向量检索**永远**会返回 top_k 条，哪怕库里根本没这本书 —— "
-            "所以必须有这一步，否则搜「量子力学」也会返回一堆高数。"
+            "所以必须有这一步，否则搜「考古」也会返回一堆高数。"
+        ),
+    )
+    rerank: Optional[bool] = Field(
+        default=None,
+        description=(
+            "是否走 cross-encoder 精排。不传则用服务端配置的默认值。"
+            "**留这个开关是为了做 A/B** —— 传 false 能拿到纯召回的排序，"
+            "用来量化「精排到底有没有净增益」，而不是靠感觉说它有用"
         ),
     )
 
@@ -254,6 +276,15 @@ class SearchHit(BaseModel):
 
     post_id: int = Field(description="帖子在主服务里的主键，拿它可以查详情")
     score: float = Field(description="余弦相似度，越大越像。理论上限 1.0")
+    rerank_score: Optional[float] = Field(
+        default=None,
+        description=(
+            "精排分（cross-encoder，sigmoid 到 0~1）；没开 rerank 时为 null。"
+            "**它和 score 不可比** —— 两个模型的输出，别混着排序。"
+            "它也不是余弦的修正版，是另一套判定：score 看「整体语义方向」，"
+            "rerank_score 看「这两段文字是不是在说同一件事」"
+        ),
+    )
     text: str = Field(description="真正被向量化的那段文本，出问题时用它排查")
     book_name: Optional[str] = Field(default=None)
     author: Optional[str] = Field(default=None)
@@ -297,6 +328,118 @@ class SearchResponse(BaseModel):
     )
     count: int = Field(description="过滤后的命中数。可能为 0，这是正常结果不是错误")
     hits: list[SearchHit]
+
+
+# ============================================================================
+# M2.6 多模态：以图搜书
+# ============================================================================
+
+
+class SearchByImageRequest(BaseModel):
+    """以图搜书的请求。"""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {"image": "data:image/jpeg;base64,/9j/4AAQSkZJRg...", "top_k": 5}
+        }
+    )
+
+    image: str = Field(
+        min_length=1,
+        description=(
+            "图片，二选一："
+            "① base64 data URL，形状 `data:image/jpeg;base64,<...>`；"
+            "② http(s) 直链。**不接受本地文件路径** —— 那等于开了个读任意文件的口子。"
+        ),
+    )
+    top_k: int = Field(default=10, ge=1, le=50, description="最多返回几条")
+    min_score: Optional[float] = Field(
+        default=None, description="余弦下限，不传则用服务端默认阈值（与 /search 同一套）"
+    )
+
+
+class BookSearchResult(BaseModel):
+    """图里认出的**一本书**，以及它检索出来的帖子。
+
+    `book` 有值而 `count == 0` 是有意义的结果，不是错误：
+    **识别对了，但库里没有这本书** —— 该查语料覆盖，不是查视觉模型。
+    """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "book": "高等数学",
+                "query": "高等数学",
+                "count": 2,
+                "hits": [],
+            }
+        }
+    )
+
+    book: str = Field(
+        description="视觉模型从图里读出来的书名。⚠️ 来自图片，是**不可信输入**，只被当检索词用"
+    )
+    query: str = Field(
+        description="实际拿去检索的词。目前等于 book，单独列出来是为了将来可替换"
+    )
+    count: int = Field(description="这一本命中几条，可能是 0")
+    hits: list[SearchHit]
+
+
+class SearchByImageResponse(BaseModel):
+    """以图搜书的响应。
+
+    ## 为什么是列表，不是一个书名
+
+    真实图片常常是**一排书脊**（二手书群里的典型图），一张图里有十几本书。
+    只回一个书名等于「随便挑了其中一本」，而且调用方看不出另外十几本被丢了。
+    单本封面图走同一条路，结果就是长度为 1 的列表。
+
+    ## 两个列表的长度可能不一样，这个差额是**故意露出来**的
+
+    `recognized_books` 是模型认出来的全部（上限 20），
+    `results` 是**真的去检索了**的那些（上限 10，只覆盖前 N 本，同序一一对应）。
+
+    为什么分开设上限：识别是一次模型调用，认 1 本和认 20 本的钱一样；
+    检索是每本一次完整链路（BM25 + 向量 + RRF + 精排），全是真算力。
+    所以「认得出多少」放宽，「搜多少」收紧。
+    **认了 20 本只搜 10 本，用户必须看得见**（`len(results) < len(recognized_books)`），
+    而不是我们默默丢掉一半、装作只认出 10 本。
+    """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "recognized_books": ["高等数学", "线性代数"],
+                "min_score": None,
+                "results": [
+                    {
+                        "book": "高等数学",
+                        "query": "高等数学",
+                        "count": 2,
+                        "hits": [],
+                    }
+                ],
+            }
+        }
+    )
+
+    recognized_books: list[str] = Field(
+        description=(
+            "视觉模型从图里读出来的书名，按图里的顺序。"
+            "**空列表 = 一本书都没认出来**（这种情况 results 必然也是空的，"
+            "不是检索失败），该让用户重拍而不是去查语料"
+        )
+    )
+    min_score: Optional[float] = Field(
+        default=None, description="本次实际生效的阈值（None 表示没过滤）"
+    )
+    results: list[BookSearchResult] = Field(
+        description=(
+            "每本一条，**是 recognized_books 的前缀**（同序一一对应）。"
+            "比 recognized_books 短就说明认出的书超过了检索上限"
+        )
+    )
 
 
 # ============================================================================
@@ -418,4 +561,48 @@ class ChatResponse(BaseModel):
             "从 tool_calls 里收集 post_ids，去重后回主服务取全量字段。"
             "模型一句没找到就是空列表。"
         ),
+    )
+
+
+class UsageStats(BaseModel):
+    """进程启动以来的 LLM token 用量估算（M3.2）。
+
+    ⚠️ 三个必须说清的边界，别当成账单：
+    1. **进程内累计**，重启即清零；多副本各算各的。
+    2. **只统计文本 LLM**。视觉模型自带免费额度、计费口径不同，不计入；
+       本地 BGE embedding 在 CPU 上跑，本来就不花钱。
+    3. 成本是按配置里的**单价估算**的（`pricing_cny_per_mtok` 会原样返回），
+       不是从账单同步的真实值。官方调价了要改 `.env`。
+    """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "llm_calls": 42,
+                "prompt_tokens": 51200,
+                "completion_tokens": 8400,
+                "total_tokens": 59600,
+                "estimated_cost_cny": 0.1696,
+                "calls_without_usage": 0,
+                "pricing_cny_per_mtok": {"input": 2.0, "output": 8.0},
+            }
+        }
+    )
+
+    llm_calls: int = Field(description="累计 LLM 调用次数（含 batch 里的每一次）")
+    prompt_tokens: int = Field(description="累计输入 token")
+    completion_tokens: int = Field(description="累计输出 token")
+    total_tokens: int = Field(description="输入 + 输出")
+    estimated_cost_cny: float = Field(
+        description="按配置单价估算的成本（元）。**估算值**，非账单"
+    )
+    calls_without_usage: int = Field(
+        default=0,
+        description=(
+            "成功结束但**拿不到 usage** 的调用数。**这一栏 > 0 就说明账目不全** ——"
+            "比如 provider 换了字段名。它存在的意义就是别让「统计失效」伪装成「成本为 0」"
+        ),
+    )
+    pricing_cny_per_mtok: dict[str, float] = Field(
+        default_factory=dict, description="算这笔账用的单价，方便判断数字是否还作数"
     )

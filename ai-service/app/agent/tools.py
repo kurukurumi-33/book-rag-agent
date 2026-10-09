@@ -45,6 +45,10 @@ def search_books(
 
 
     """
+    # ⚠️ 这里要 50 条（_SEARCH_POOL），比搜索引擎自己的召回池（20）大 ——
+    # 因为后面要按 has_notes / price 过滤，过滤完可能剩不下几条，多要一点才够挑。
+    # 精排（rerank）只会重排前 20 条（config 的 rerank_pool），第 21~50 名保持 RRF 顺序。
+    # 这是有意的：精排是 CPU 上的逐对前向，50 条要 3~5 秒，对话里等不起。
     old_list = search(query,_SEARCH_POOL)
     results = []
     for hits in old_list:

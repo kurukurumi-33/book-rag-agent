@@ -1,0 +1,23 @@
+# Maven 构建产物。
+#
+# ⚠️ 这个目录非排除不可，不只是「省点体积」：
+#    target/classes 里有 application-local.yml 的**副本**（构建时拷过去的），
+#    而那个文件里有数据库密码。不排除的话，本地构建过的那份配置
+#    会被打进构建上下文、再进镜像 —— 等于把密码烤进镜像层。
+#
+#    镜像层是**可以被人 pull 下来翻的**，删文件也不会真的删掉
+#    （历史层还在）。所以这种事只能靠「一开始就别放进去」。
+target/
+
+# 本地私有配置：**绝对不进镜像**（里面有数据库密码）
+src/main/resources/application-local.yml
+src/main/resources/application-local.yaml
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# 杂项
+*.log
+.DS_Store

@@ -1,0 +1,181 @@
+name: CI
+
+# 什么时候跑：
+#   push 到 main —— 每次提交都验一遍
+#   PR           —— 合并前必须绿
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # 允许在 Actions 页面手动点一次（改完 CI 配置想立刻验证时省得空提交一个 commit）
+  workflow_dispatch:
+
+# 同一分支连着 push 时，取消上一次还在跑的 —— 结果反正会被新的覆盖，
+# 让它跑完只是白占 runner 额度
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# ============================================================================
+# ⚠️ 先说清 CI **测不到什么**，免得绿勾被高估
+# ============================================================================
+# 1. **不真调 LLM。** conftest.py 在 import 前塞了假 key，所有外部调用在用例里
+#    都被 monkeypatch 掉了 —— 所以 CI **不花一分钱**。
+#    反过来说：**CI 绿 ≠ 接口能调通**。key 失效、额度用完、模型下线，
+#    CI 一个都发现不了，只能在本地实测里暴露。
+# 2. **检索质量不进自动 CI。** tests/test_search_eval.py 要的不是「服务起着」，
+#    是「库里灌好了那 1 万条语料」—— 而灌数据要**真调 LLM**（花钱、要 key）。
+#    把 key 塞进 secret、每次 push 烧一遍数据，是拿钱换一个没必要的绿勾。
+#    它留在本地跑：`pytest -m integration tests/test_search_eval.py`。
+# ============================================================================
+
+jobs:
+  # ==========================================================================
+  # 1. Python 单元测试（不依赖任何外部服务）
+  # ==========================================================================
+  # 这一组是「随时能跑、秒级出结果」的测试，所以每次提交都跑。
+  # 它不需要 MySQL / Spring Boot / AI 服务，也就不需要 Docker —— 装完依赖直接跑。
+  ai-service-tests:
+    name: AI 服务 · 单元测试
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ai-service
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"          # 和 Dockerfile 保持一致
+          cache: pip
+          cache-dependency-path: ai-service/requirements.txt
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          # ⚠️ torch 必须先单独从 CPU 源装。
+          #    直接 `pip install -r requirements.txt` 会拉默认的 CUDA 版（2GB+），
+          #    CI 上既没有 GPU 也用不到，白白多花好几分钟下载。
+          #    先装 CPU 版，后面 requirements.txt 里那行 torch 就会判定「已满足」。
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+
+      - name: 跑单元测试
+        run: pytest -m "not integration" -q
+        env:
+          # 测试是自洽的（不真调 LLM），但 config.py 的 Settings 要求这个字段必填。
+          # CI 上没有 .env（它被 .gitignore 排除），所以在这里给个假值。
+          LLM_API_KEY: ci-dummy-key
+
+  # ==========================================================================
+  # 2. Java 主服务：编译 + 打包
+  # ==========================================================================
+  # 目前 book-service 还没有测试类，所以这一步只保证「代码能编译、能打包」——
+  # 但它已经能挡住一类真实事故：改完代码本地没编译就提交，
+  # 别人 clone 下来直接报错。成本很低，信号很明确。
+  book-service-build:
+    name: 主服务 · 编译打包
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: book-service
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "24"
+          distribution: temurin
+          cache: maven
+
+      - name: 编译并打包
+        run: mvn -B -DskipTests package
+
+  # ==========================================================================
+  # 3. Redis 集成测试（真连 Redis）
+  # ==========================================================================
+  # 这一层存在的理由，写全在 tests/test_ratelimit_wiring.py 的开头：
+  #
+  #   内存版的假 Redis 是**用 Python 重写了滑动窗口**，所以那段 Lua
+  #   **根本没被执行到** —— 「测试和一个错误实现达成了一致」。
+  #   凡是逻辑写在 Redis / SQL / 存储过程里的，都必须真连一次才算测过。
+  #
+  # 为什么用 GitHub 原生的 `services:` 而不是 docker compose：
+  # 这里只需要一个 Redis。原生 service 起它比自己维护一份 compose 简单，
+  # 也没有 compose 版本兼容的坑。项目根那份 docker-compose.yml 是给**人**
+  # 一键起全栈用的，职责不同，不该互相绑定。
+  redis-integration:
+    name: 集成 · 真 Redis
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ai-service
+
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        # 健康检查不能省：容器「起来了」不等于端口已经 bind，
+        # 少了它，测试会以一个莫名其妙的 ConnectionError 开场。
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: ai-service/requirements.txt
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+
+      # BGE 权重约 100MB，不缓存的话每次 push 都重下一遍
+      - name: 缓存本地模型权重
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ runner.os }}-bge-small-zh-v1.5
+
+      # ⚠️ 用 `-m integration` + **显式文件列表**，不是 `-m integration` 全跑。
+      #    全跑会把 test_search_eval.py 也捞进来，然后它因为没索引而 skip 一片，
+      #    输出看着像「都过了」，实际那条链路一行都没测 ——
+      #    这正是本项目反复批判的「静默通过」。
+      - name: 跑 Redis 集成测试
+        run: |
+          pytest -m integration tests/test_redis_integration.py tests/test_ratelimit_wiring.py -q
+        env:
+          LLM_API_KEY: ci-dummy-key
+          # service 容器映射到 runner 的 localhost（不是 service 名）
+          REDIS_URL: redis://127.0.0.1:6379/0
+          # 精排权重 1.1GB，这一层用不到 —— 唯一碰 /search 的那条用例
+          # 只验证「它没被限流」。本地保持默认 true，效果测试照跑。
+          RERANK_ENABLED: "false"
+          # 这几组用例不测模型，启动预热只会白等 15 秒
+          WARMUP_ON_STARTUP: "false"
+
+# ============================================================================
+# 没有第 4 个 job —— 全栈集成（docker compose 起 MySQL + 双服务）
+# ============================================================================
+# 写在这里是为了留个「为什么不」的记录，免得将来有人以为是漏了。
+#
+# docker-compose.yml 落地后确实可以加一个 job 起全栈。但加了也只能跑
+# **建索引之前**的那部分：语料要从 Spring Boot 拉，而灌 1 万条语料必须真调 LLM。
+# 换句话说，加了它，`test_search_eval.py` 照样 skip。
+#
+# 所以现在这样分更诚实：
+#   CI 管「代码没写坏」—— 单测 + 编译 + Lua 在真 Redis 上跑得通
+#   人管「检索质量没退化」—— 本地灌好数据跑 test_search_eval.py（约 36 秒）
+#
+# 如果哪天语料能**不花 LLM token** 地造出来（scripts/ 里已有 MockPostBatch 的雏形），
+# 这里就该补上这个 job —— 那时候它测的才是完整链路。
+# ============================================================================

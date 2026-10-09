@@ -13,7 +13,7 @@ AI 服务是**无状态的纯函数**——不持有数据库连接、不在本�
 详情仍然回主服务按 id 取（`get_post`）。
 
 这样避免了「同一份数据存两处、要保证两边一致」的经典麻烦。
-代价是查详情多一次 HTTP —— 220 条数据的场景完全划算。
+代价是查详情多一次 HTTP —— 本地进程间调用 10ms 量级，换来的是「改字段不用重建索引」。
 """
 
 import re
@@ -78,19 +78,116 @@ def _post(path: str, json_body):
     return _request("POST", path, json_body=json_body)
 
 
-def fetch_posts(extract_status: str | None = "DONE", limit: int = 500) -> list[dict]:
-    """按抽取状态拉帖子列表（建索引用）。
+def ping(timeout: float = 1.5) -> dict:
+    """探一下主服务活着没有。给 `/health` 用。**永远不抛异常。**
+
+    ## 为什么单独写一个，而不是让 /health 直接调 fetch_posts
+
+    1. **超时必须短。** `DEFAULT_TIMEOUT` 是 30 秒（迁就建索引拉 500 条），
+       拿它来探活，主服务挂掉时 `/health` 会卡 30 秒才回 —— 探活接口自己先死了。
+    2. **不能抛。** /health 的语义是「报告状态」，主服务挂了正是**它要报告的内容**，
+       不是让它也跟着 500。所以这里把异常收成返回值。
+    3. **不烧模型。** 只打一个轻量的 GET。LLM 那条链路**故意不实测** ——
+       探活每次烧一次 token 太贵，而且 key 有效性在真调用时自然暴露。
+
+    Returns:
+        {"reachable": bool, "url": str, "status_code": int | None, "error": str | None}
+    """
+    url = f"{settings.book_service_url}/api/posts"
+    try:
+        # 只取 1 条：目的是「通不通」，不是「数据对不对」
+        resp = httpx.get(
+            url, params={"limit": 1}, timeout=timeout
+        )
+    except httpx.HTTPError as e:
+        return {
+            "reachable": False,
+            "url": url,
+            "status_code": None,
+            "error": f"{type(e).__name__}: {e}",
+        }
+    # 4xx/5xx 也算「到了但不对」—— reachable 描述的是**网络可达**，
+    # 所以这里看状态码而不是直接判 True。两个字段各说各的，不混在一起。
+    return {
+        "reachable": resp.status_code < 500,
+        "url": url,
+        "status_code": resp.status_code,
+        "error": None if resp.status_code < 500 else f"HTTP {resp.status_code}",
+    }
+
+
+def fetch_posts(
+    extract_status: str | None = "DONE", limit: int = 500, offset: int = 0
+) -> list[dict]:
+    """按抽取状态拉帖子列表（建索引用）。**单页**，上限 500 条。
 
     默认只要 DONE：PENDING 的还没抽取、结构化字段是空的，拼出来的检索文本没有意义；
     FAILED 的抽取本身就没成功，拼出来是原文，会污染向量空间。
 
     :param extract_status: PENDING / DONE / FAILED；传 None 表示不过滤
     :param limit: 主服务那边会截断到 500
+    :param offset: 跳过前多少条。要拿全量得用 fetch_all_posts 翻页，别指望调大 limit
+
+    ⚠️ 别用 `fetch_posts(limit=10000)` 去「一次拉完」：主服务把 limit 夹在 500，
+    传 10000 进去只会拿回 500 条，**而且不报错** —— 静默少数据，最难查。
     """
-    params: dict = {"limit": limit}
+    params: dict = {"limit": limit, "offset": offset}
     if extract_status:
         params["extractStatus"] = extract_status
     return _get("/api/posts", params)
+
+
+def fetch_all_posts(
+    extract_status: str | None = "DONE",
+    limit: int | None = None,
+    page_size: int = 500,
+) -> list[dict]:
+    """翻页拉全量帖子。
+
+    为什么要有这个函数：主服务单次最多给 500 条（故意的，防一次拉爆内存），
+    而语料有 1 万条。`fetch_posts` 是单页接口，拿全量必须自己循环。
+
+    :param limit: 最多总共要多少条；None = 不设上限，一直翻到翻完
+    :param page_size: 每页多少条。默认贴着主服务 500 的上限，翻页次数最少
+
+    两道防死循环的保险（都遇到过类似的事）：
+
+      1. **短页即终止** —— 返回条数 < page_size 说明是最后一页了。
+         不要去「预先查总数」再算页数：那要多一个接口、多一次往返，
+         而且两次调用之间数据可能变。
+      2. **去重 + 上限** —— 万一主服务忽略了 offset（比如回退到旧版本），
+         它会每页都返回同样的 500 条。短页判断永远不会触发，就死循环了。
+         所以按 id 去重：某一页**全是重复**就说明页没翻动，立刻停。
+    """
+    all_posts: list[dict] = []
+    seen: set = set()
+    offset = 0
+
+    while True:
+        # 最后一页只取需要的量，别多拉
+        size = page_size
+        if limit is not None:
+            remaining = limit - len(all_posts)
+            if remaining <= 0:
+                break
+            size = min(page_size, remaining)
+
+        page = fetch_posts(extract_status=extract_status, limit=size, offset=offset)
+
+        fresh = [p for p in page if p.get("id") not in seen]
+        seen.update(p.get("id") for p in page)
+        all_posts.extend(fresh)
+
+        # 保险 1：短页 = 到头了
+        if len(page) < size:
+            break
+        # 保险 2：整页都是见过的 —— offset 没起作用，再翻下去是死循环
+        if not fresh:
+            break
+
+        offset += len(page)
+
+    return all_posts
 
 
 def get_post(post_id: int) -> dict | None:

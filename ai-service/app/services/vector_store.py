@@ -55,26 +55,45 @@ def get_collection():
     return _collection
 
 
+# 一次 upsert 最多写多少条。
+#
+# 为什么必须切块：Chroma 底层（Rust 绑定）有硬上限，超了直接抛
+#     InternalError: Batch size of 9997 is greater than max batch size of 5461
+# ——**这不是"数据太大性能不好"，是直接失败**。220 条语料时永远碰不到，
+# 扩到 1 万条第一次建索引就撞上了。
+#
+# 取 2000 而不是贴着 5461：留一半余量。这个上限是 Chroma 内部定的，
+# 不同版本会变（甚至跟 embedding 维度有关），贴着写等于把版本升级变成线上事故。
+_UPSERT_CHUNK = 2000
+
+
 def upsert(
     ids: list[str],
     embeddings: list[list[float]],
     documents: list[str],
     metadatas: list[dict],
 ) -> None:
-    """写入或覆盖一批向量。
+    """写入或覆盖一批向量。**参数长度可以任意大**（内部自动切块）。
 
     用 upsert 而不是 add：同一个 id 重复写会覆盖，不会重复插入。
     所以**重复调建索引接口是幂等的**，不会把库写成一堆重复条目。
 
     id 用帖子的数据库主键转成字符串 —— 这样向量库里的每条记录
     都能直接对回主服务里那一行。
+
+    切块放在这一层，而不是让调用方自己切：能不能一次写 1 万条是
+    **Chroma 的实现细节**，不该泄漏到 search.py 去（那里的代码是「把帖子写进去」，
+    不该操心底下这批库的批次上限）。换向量库时也只需要改这个文件。
     """
-    get_collection().upsert(
-        ids=ids,
-        embeddings=embeddings,
-        documents=documents,
-        metadatas=metadatas,
-    )
+    collection = get_collection()
+    for start in range(0, len(ids), _UPSERT_CHUNK):
+        end = start + _UPSERT_CHUNK
+        collection.upsert(
+            ids=ids[start:end],
+            embeddings=embeddings[start:end],
+            documents=documents[start:end],
+            metadatas=metadatas[start:end],
+        )
 
 
 def query(query_embedding: list[float], top_k: int) -> list[dict]:
@@ -107,6 +126,49 @@ def query(query_embedding: list[float], top_k: int) -> list[dict]:
         }
         for doc_id, distance, document, metadata in zip(
             ids, distances, documents, metadatas
+        )
+    ]
+
+
+def all_documents() -> tuple[list[str], list[str], list[dict]]:
+    """取出库里全部 (id, 文档文本, 元数据)。
+
+    给 BM25 建索引用 —— BM25 不单独持久化，而是**从向量库重建**，
+    这样两个索引的语料永远是同一份，不会出现「改了一个忘了改另一个」。
+    （见 app/services/lexical.py 开头的说明。）
+    """
+    result = get_collection().get(include=["documents", "metadatas"])
+    return (
+        result["ids"],
+        [d or "" for d in result["documents"]],
+        [m or {} for m in result["metadatas"]],
+    )
+
+
+def get_by_ids(ids: list[str]) -> list[dict]:
+    """按 id 批量取回记录（含向量）。
+
+    用途：BM25 通道召回的候选**绕过了向量检索**，手里没有它的余弦分。
+    但对外输出需要一个统一的 score 字段，所以这里把它的向量捞回来现算 ——
+    一次批量调用，比逐条查便宜得多。
+    """
+    if not ids:
+        return []
+    result = get_collection().get(
+        ids=ids, include=["documents", "metadatas", "embeddings"]
+    )
+    return [
+        {
+            "id": doc_id,
+            "text": doc or "",
+            "metadata": meta or {},
+            "embedding": [float(x) for x in emb],
+        }
+        for doc_id, doc, meta, emb in zip(
+            result["ids"],
+            result["documents"],
+            result["metadatas"],
+            result["embeddings"],
         )
     ]
 

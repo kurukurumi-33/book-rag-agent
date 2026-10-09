@@ -7,7 +7,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 /**
- * 二手书智能匹配 - 主服务。
+ * 智觅（二手书智能匹配 Agent） - 主服务。
  *
  * 接口文档由 springdoc 从注解自动生成，不用手写：
  *   Swagger UI  → http://localhost:8080/swagger-ui.html

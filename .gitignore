@@ -22,8 +22,24 @@ data/
 *.db
 *.sqlite3
 
+# 例外：书目种子要跟着仓库走。
+# data/ 本来是给「运行时产物」准备的（向量库、缓存），但这份 json 不一样 ——
+# 它是**生成帖子的输入**，不是产物。不提交的话，别人 clone 下来跑
+# gen_mock_posts.py 会退回内置的 30 本种子，上万条帖子退化成「每本几百份」。
+# 体积也就几百 KB，值得带上。
+!ai-service/scripts/data/
+!ai-service/scripts/data/*.json
+
 # 向量库本地文件
 chroma_db/
+
+# 本地模型权重（rerank 的 cross-encoder，1.1GB —— 绝对不要进仓库）
+#
+# 为什么不提交：任何 git 托管服务对单文件都有硬上限（GitHub 是 100MB，
+# 超了直接拒绝 push），1.1GB 会**把整个仓库推不上去**。
+# 正确做法是 clone 之后自己下一次 —— 下载命令见
+# docs/private/环境与依赖操作记录.md（走 hf-mirror + 绕开 Xet 协议）。
+ai-service/models/
 
 # Maven 构建产物（target/classes 里还有一份 application-local.yml 的副本）
 target/
@@ -39,3 +55,15 @@ Thumbs.db
 
 # 本地草稿（不进仓库）
 docs/private/
+
+# 验收用的真书图（M2.6 以图搜书）
+#
+# 为什么不提交：这是从手机/微信群存下来的真实照片，带 EXIF（拍摄时间、机型，
+# 有时还有 GPS），体积也不小。它只是**喂给脚本的一张输入**，不是项目产物 ——
+# 别人 clone 下来没有它照样能跑测试。放本地，随手删。
+#
+# 但 README 要跟着仓库走 —— 它写明了「该放哪几张图、输出怎么看」，
+# 公开的那份演示流程.md 也指到这个目录。别人看到的是 README，不是我们的照片。
+test-images/*
+!test-images/README.md
+

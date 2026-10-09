@@ -1,4 +1,4 @@
--- 二手书智能匹配 - 数据库结构
+-- 智觅（二手书智能匹配 Agent） - 数据库结构
 -- 执行：mysql -uroot -p < schema.sql
 
 CREATE DATABASE IF NOT EXISTS book_agent

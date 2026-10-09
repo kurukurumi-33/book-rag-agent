@@ -1,4 +1,4 @@
-# 二手书 AI 服务依赖
+# 智觅 AI 服务依赖
 #
 # 装（国内走清华镜像）：
 #     .venv\Scripts\activate
@@ -23,7 +23,8 @@ python-dotenv
 pydantic-settings
 
 # 语义检索（M2）
-# sentence-transformers —— 跑本地 BGE 模型
+# sentence-transformers —— 跑本地 BGE 模型；**精排（M2.5）的 CrossEncoder 也在里面**，
+#                          所以上 rerank 不用新装包，只多下一个 1.1GB 的权重
 # chromadb              —— 嵌入式向量库，跑在进程内，不用起服务
 # torch                 —— sentence-transformers 的底层，**必须 CPU 版**
 sentence-transformers
@@ -32,6 +33,20 @@ torch
 
 # 调 Spring Boot 主服务的 HTTP 客户端
 httpx
+
+# 混合检索（BM25 关键词 + 向量）
+#   rank-bm25 —— BM25 打分实现，纯 Python，无需编译
+#   jieba     —— 中文分词。⚠️ BM25 必需：中文句子没有空格，
+#                不先分词的话整句话会被当成一个"词"，BM25 直接失效
+rank-bm25
+jieba
+
+# Redis —— 限流计数 + 会话历史缓存（多副本共享的运维态）
+redis
+
+# 测试 / CI
+#   pytest —— 测试框架；fastapi 的 TestClient 依赖已装的 httpx，不用额外装
+pytest
 
 # 开发脚本用（种子数据生成 / 临时实验），AI 服务本体不用
 pymysql

@@ -1,6 +1,6 @@
 """单测 app/agent/tools.py 的 search_books —— 不接 agent、不接 LLM。
 
-用真实库存（Chroma 里 220 条），跑 docstring 里那三条验收。
+用真实库存（Chroma 里现有的全部条目），跑 docstring 里那三条验收。
 用法：python scripts/try_search_books.py
 """
 

@@ -1,0 +1,315 @@
+{
+  "summary": {
+    "positive_rate": 1.0,
+    "positive_ok": 16,
+    "positive_total": 16,
+    "positive_top1_ok": 16,
+    "negative_ok": 5,
+    "negative_total": 5,
+    "leaks_blocked": 1,
+    "leaks_total": 8
+  },
+  "cases": [
+    {
+      "query": "同济高数",
+      "expect": [
+        "高等数学"
+      ],
+      "ok": true,
+      "top1_ok": true,
+      "top": [
+        "高等数学",
+        "高等数学",
+        "高等数学"
+      ],
+      "top1_score": 0.6187,
+      "top1_rerank_score": 0.7147
+    },
+    {
+      "query": "计算机网络",
+      "expect": [
+        "计算机网络"
+      ],
+      "ok": true,
+      "top1_ok": true,
+      "top": [
+        "计算机网络",
+        "计算机网络",
+        "计算机网络"
+      ],
+      "top1_score": 0.6942,
+      "top1_rerank_score": 0.7297
+    },
+    {
+      "query": "软件工程",
+      "expect": [
+        "软件工程"
+      ],
+      "ok": true,
+      "top1_ok": true,
+      "top": [
+        "软件工程",
+        "软件工程",
+        "软件工程"
+      ],
+      "top1_score": 0.7261,
+      "top1_rerank_score": 0.7282
+    },
+    {
+      "query": "有没有高数书",
+      "expect": [
+        "高等数学"
+      ],
+      "ok": true,
+      "top1_ok": true,
+      "top": [
+        "高等数学",
+        "高等数学",
+        "高等数学"
+      ],
+      "top1_score": 0.6746,
+      "top1_rerank_score": 0.7161
+    },
+    {
+      "query": "高数还有吗",
+      "expect": [
+        "高等数学"
+      ],
+      "ok": true,
+      "top1_ok": true,
+      "top": [
+        "高等数学",
+        "高等数学",
+        "高等数学"
+      ],
+      "top1_score": 0.6913,
+      "top1_rerank_score": 0.7193
+    },
+    {
+      "query": "我想找本线代",
+      "expect": [
+        "线性代数",
+        "线性代数应该这样学"
+      ],
+      "ok": true,
+      "top1_ok": true,
+      "top": [
+        "线性代数应该这样学",
+        "线性代数应该这样学",
+        "线性代数应该这样学"
+      ],
+      "top1_score": 0.6423,
+      "top1_rerank_score": 0.716
+    },
+    {
+      "query": "线代",
+      "expect": [
+        "线性代数",
+        "线性代数应该这样学"
+      ],
+      "ok": true,
+      "top1_ok": true,
+      "top": [
+        "线性代数",
+        "线性代数",
+        "线性代数"
+      ],
+      "top1_score": 0.6836,
+      "top1_rerank_score": 0.7282
+    },
+    {
+      "query": "数据结构",
+      "expect": [
+        "数据结构",
+        "数据结构与算法分析"
+      ],
+      "ok": true,
+      "top1_ok": true,
+      "top": [
+        "数据结构",
+        "数据结构",
+        "数据结构"
+      ],
+      "top1_score": 1.0,
+      "top1_rerank_score": 0.7311
+    },
+    {
+      "query": "毛概",
+      "expect": [
+        "毛概",
+        "毛泽东思想和中国特色社会主义理论体系概论"
+      ],
+      "ok": true,
+      "top1_ok": true,
+      "top": [
+        "毛概",
+        "毛概",
+        "毛概"
+      ],
+      "top1_score": 1.0,
+      "top1_rerank_score": 0.731
+    },
+    {
+      "query": "新视野大学英语",
+      "expect": [
+        "新视野大学英语",
+        "新视野大学英语读写教程",
+        "新视野大学英语综合教程",
+        "新视野大学英语视听说教程",
+        "新视野大学英语2",
+        "新视野"
+      ],
+      "ok": true,
+      "top1_ok": true,
+      "top": [
+        "新视野大学英语",
+        "新视野大学英语",
+        "新视野大学英语2"
+      ],
+      "top1_score": 0.758,
+      "top1_rerank_score": 0.7306
+    },
+    {
+      "query": "计算机操作系统",
+      "expect": [
+        "操作系统",
+        "计算机操作系统",
+        "操作系统导论",
+        "操作系统设计与实现"
+      ],
+      "ok": true,
+      "top1_ok": true,
+      "top": [
+        "计算机操作系统",
+        "计算机操作系统",
+        "操作系统"
+      ],
+      "top1_score": 0.7523,
+      "top1_rerank_score": 0.7297
+    },
+    {
+      "query": "同济版高数",
+      "expect": [
+        "高等数学"
+      ],
+      "ok": true,
+      "top1_ok": true,
+      "top": [
+        "高等数学",
+        "高等数学",
+        "高等数学"
+      ],
+      "top1_score": 0.6258,
+      "top1_rerank_score": 0.6987
+    },
+    {
+      "query": "考研数学用的",
+      "expect": [
+        "考研数学复习全书",
+        "高等数学",
+        "线性代数",
+        "概率统计"
+      ],
+      "ok": true,
+      "top1_ok": true,
+      "top": [
+        "考研数学复习全书",
+        "考研数学复习全书",
+        "考研数学复习全书"
+      ],
+      "top1_score": 0.7959,
+      "top1_rerank_score": 0.716
+    },
+    {
+      "query": "谢希仁",
+      "expect": [
+        "计算机网络"
+      ],
+      "ok": true,
+      "top1_ok": true,
+      "top": [
+        "计算机网络",
+        "计算机网络",
+        "计算机网络"
+      ],
+      "top1_score": 0.6957,
+      "top1_rerank_score": 0.7279
+    },
+    {
+      "query": "严蔚敏",
+      "expect": [
+        "数据结构",
+        "算法分析"
+      ],
+      "ok": true,
+      "top1_ok": true,
+      "top": [
+        "算法分析",
+        "数据结构",
+        "数据结构"
+      ],
+      "top1_score": 0.7253,
+      "top1_rerank_score": 0.7288
+    },
+    {
+      "query": "java还有吗",
+      "expect": [
+        "Java核心技术"
+      ],
+      "ok": true,
+      "top1_ok": true,
+      "top": [
+        "Java核心技术",
+        "Java核心技术",
+        "Java核心技术"
+      ],
+      "top1_score": 0.6479,
+      "top1_rerank_score": 0.7061
+    },
+    {
+      "query": "考古",
+      "expect": [],
+      "ok": true,
+      "top1_ok": true,
+      "top": [],
+      "top1_score": null,
+      "top1_rerank_score": null
+    },
+    {
+      "query": "葡萄酒",
+      "expect": [],
+      "ok": true,
+      "top1_ok": true,
+      "top": [],
+      "top1_score": null,
+      "top1_rerank_score": null
+    },
+    {
+      "query": "区块链",
+      "expect": [],
+      "ok": true,
+      "top1_ok": true,
+      "top": [],
+      "top1_score": null,
+      "top1_rerank_score": null
+    },
+    {
+      "query": "钢琴",
+      "expect": [],
+      "ok": true,
+      "top1_ok": true,
+      "top": [],
+      "top1_score": null,
+      "top1_rerank_score": null
+    },
+    {
+      "query": "土木工程",
+      "expect": [],
+      "ok": true,
+      "top1_ok": true,
+      "top": [],
+      "top1_score": null,
+      "top1_rerank_score": null
+    }
+  ]
+}
