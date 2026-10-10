@@ -488,7 +488,7 @@ class ToolCallRecord(BaseModel):
         default_factory=list,
         description=(
             "这次工具返回的书 id。**卡片的数据入口** —— search_books 的摘要只有"
-            "书名/价格/有没有笔记三栏，做不了卡片；靠这批 id 回主服务补全成 books。"
+            "书名/价格两栏，做不了卡片；靠这批 id 回主服务补全成 books。"
             "失败路径（幻觉工具名 / 工具报错）给空列表，不是缺字段。"
         ),
         examples=[[139, 133, 124, 98, 85]],

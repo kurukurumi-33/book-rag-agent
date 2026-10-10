@@ -790,7 +790,7 @@ agent 一轮跑完，`chat_once` 返回的是**整段会话**（旧历史 + 新�
 按 id 回主服务取全量字段 → 组装成 `books`。
 
 `tool_calls` 里只有 `result_count`（几条）是不够的：`search_books` 返回的摘要
-只有书名/价格/有没有笔记三栏，做不了卡片。**而且只调 `search_books` 时
+只有书名/价格两栏，做不了卡片。**而且只调 `search_books` 时
 `arguments` 里没有 post_id**，前端没法自己补 —— 所以只能由服务端带出来。
 """,
     response_description="agent 的回答 + 这一轮的工具调用轨迹 + 涉及到的书卡",
