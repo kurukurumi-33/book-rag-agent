@@ -36,8 +36,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # 不是终端时 stdout 是块缓冲的，不加这行能几十秒一行不显示，看起来像卡死。
 # 加 hasattr 保护：pytest 会把 sys.stdout 换成自己的捕获对象，那个没有 reconfigure，
 # 不加判断的话本文件被 tests/ 里的集成测试 import 时会直接炸。
+#
+# errors="replace"：本机控制台是 cp936(GBK)，本文件打 ✅/⚠️/❌ 会 UnicodeEncodeError。
+# 实测两个 venv 都是 gbk（`.venv` 和 `.venv-eval` 一样），所以这不是偶发。
+# 之前跑成功是因为那个终端是 UTF-8 代码页；换个终端（比如双击 bat、IDE 内置
+# 非 UTF-8 终端）就会在**汇总打印那一步**崩，前面的评测结果全白跑。
 if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(line_buffering=True)
+    sys.stdout.reconfigure(line_buffering=True, errors="replace")
 
 import argparse  # noqa: E402
 import json  # noqa: E402
