@@ -239,6 +239,17 @@ def call_chat(client: httpx.Client, query: str) -> dict:
     return resp.json()
 
 
+def _tool_price(card_price):
+    """把卡片上的价签还原成 `search_books` 给模型的那个字符串。
+
+    两处对「没标价」的措辞不一样，实测数据里同时出现了：
+        模型看到的是 "未知"     （tools.py 里 _PRICE_UNKNOWN 的翻译）
+        卡片上写的是 "未标价"   （回主服务取详情时 null 的翻译）
+    回复里写「未知」而上下文写「未标价」，裁判会当成两回事。
+    """
+    return "未知" if card_price == "未标价" else card_price
+
+
 def contexts_from(resp: dict) -> list[str]:
     """重建**模型真正看到**的工具结果，一条书一行。
 
@@ -254,18 +265,24 @@ def contexts_from(resp: dict) -> list[str]:
 
     `get_post_detail` 是真把全量字段给模型了，所以那个工具的结果按卡片还原。
 
-    ⚠️ 还原**不是逐字节相等**，有两处口径偏差要知道（都来自「卡片是服务端翻译过的」）：
+    每行要写**工具返回的全部字段**，一个都不能少 —— 这是第一次真跑踩到的坑：
+    漏掉 `post_id` 之后，模型回答里的编号（「| 209 | 高等数学 | 未知 |」）
+    在上下文里找不到出处，裁判只能判成编的，16 条里有一半的忠实度被凭空压到 0.2。
+    **它不是幻觉，是工具真给过的。** 少写一栏 = 自己给自己扣分。
 
-      1. 价格：没标价时工具给模型的是字符串 `"未知"`，卡片里翻译成了 `"未标价"`。
-         数值本身一样，只是标签不同，对判断影响可忽略。
-      2. **摘要里本来就没有「有没有笔记」这一栏**（`search_books` 只回
-         post_id / book_name / price —— 见 app/agent/tools.py 的 return）。
-         所以如果模型回答里说了「这本有笔记」而又没调 `get_post_detail`，
-         这句话在上下文里**确实没有出处**，忠实度扣它是**对的**，不是评分器的毛病。
+    ⚠️ 还原**不是逐字节相等**，一处口径偏差要知道（来自「卡片是服务端翻译过的」）：
 
-         注意别把它和「模型用 has_notes=True 筛过」搞混：筛过 ≠ 看得见。
-         模型是拿「我筛了有笔记的」这个**自己的动作**在说话，而上下文里
-         没有任何一条能证明。这类 case 值得单独看一眼 reason。
+      价格：没标价时工具给模型的是字符串 `"未知"`（tools.py 的 `_PRICE_UNKNOWN`
+      翻译），卡片里翻译成了 `"未标价"`。由 `_tool_price()` 还原回去。
+
+    ⚠️ 另一处**不是偏差、是有意为之**：摘要里本来就没有「有没有笔记」这一栏
+      （`search_books` 只回 post_id / book_name / price）。所以如果模型回答里说
+      了「这本有笔记」而又没调 `get_post_detail`，这句话在上下文里**确实没有出处**，
+      忠实度扣它是**对的**，不是评分器的毛病。
+
+      注意别把它和「模型用 has_notes=True 筛过」搞混：筛过 ≠ 看得见。
+      模型是拿「我筛了有笔记的」这个**自己的动作**在说话，而上下文里
+      没有任何一条能证明。
     """
     cards = {b.get("post_id"): b for b in resp.get("books") or []}
     ctxs: list[str] = []
@@ -280,7 +297,18 @@ def contexts_from(resp: dict) -> list[str]:
             price = card.get("price")
 
             if name == "search_books":
-                ctxs.append(f"《{book}》 价格 {price}")
+                # ⚠️ **`编号 {pid}` 这一栏不能省** —— 第一次真跑就是漏了它，
+                #    结果 16 条里有一半的忠实度被凭空压到 0.2。
+                #
+                #    模型看到的是 `str(results)`，即
+                #    `[{'post_id': 209, 'book_name': '高等数学', 'price': '未知'}, ...]`
+                #    —— **post_id 就在里面**，而且模型回答时很爱拿它当行号用
+                #    （「| 209 | 高等数学 | 未知 |」）。上下文里不写编号，
+                #    裁判就只能把「209」判成编的，可它恰恰是工具真给过的。
+                #
+                #    这是「上下文不等于工具真实输出」的一个实例，比价格那处
+                #    更隐蔽：价格好歹还写了个值，编号是整栏都没写。
+                ctxs.append(f"编号 {pid} 《{book}》 价格 {_tool_price(price)}")
             elif name == "get_post_detail":
                 ctxs.append(
                     f"《{book}》 版次 {card.get('edition')} 价格 {price} "
@@ -332,15 +360,37 @@ def make_judge(model: str):
     走 OpenAI 兼容协议 —— DeepSeek 就是这个协议，所以 provider 仍是 "openai"，
     只是把 base_url 指过去。和 app/services/llm.py 里 get_llm() 的做法一致
     （那边用 ChatOpenAI(base_url=settings.llm_base_url)）。
+
+    ⚠️ **必须传 `AsyncOpenAI`，不能传 `OpenAI`** —— 这是第一次真跑才暴露的坑，
+       报错是 `TypeError: Cannot use agenerate() with a synchronous client`。
+
+       原因在 ragas 内部：`InstructorLLM` 构造时会 `_check_client_async()` 判一次
+       （base.py:780），把结果存成 `self.is_async`；同步客户端那就 `False`，
+       然后 `agenerate()` 第一件事就是判它、不是异步直接抛（base.py:1092-1094）。
+       而新版 collections 指标的 `score()` 是 `ascore()` 的同步包装，
+       **内部走的正是 agenerate** —— 于是每一条都在这里撞死。
+
+       为什么之前静态验证没发现：我只做了「构造指标 + 看签名」，那些都不触发调用。
+       构造 `OpenAI` 和 `AsyncOpenAI` 都不会报错，**差别要真调一次才显形**。
+
+       传异步客户端之后 `is_async=True`，`score()` 会走
+       `_run_async_in_current_loop()`（base.py:1044）—— 那条路就是给同步调用方
+       准备的，自己起 loop。所以下面的 `metric.score(**kwargs)` 写法不用改。
     """
-    from openai import OpenAI
+    from openai import AsyncOpenAI
     from ragas.llms import llm_factory
 
-    client = OpenAI(
+    client = AsyncOpenAI(
         api_key=_env("LLM_API_KEY"),
         base_url=_env("LLM_BASE_URL", "https://api.deepseek.com/v1"),
     )
-    return llm_factory(model, provider="openai", client=client)
+    # ⚠️ max_tokens 必须调大。ragas 的默认值是 **1024**（base.py:726），
+    #    而评分 prompt 要求裁判逐条列出判断再给结论，上下文一多就写不完：
+    #    第一次全量跑第 4 条（10 条上下文 + 10 行表格）直接
+    #    `IncompleteOutputException` —— 输出被截断，整条判不出来。
+    #    ragas 自己的提示就写着「结构化输出被截断就继续调大」（base.py:820-822）。
+    #    4096 是它给的推荐值，也在 DeepSeek 的范围内。
+    return llm_factory(model, provider="openai", client=client, max_tokens=4096)
 
 
 def build_metrics(judge):
@@ -441,6 +491,12 @@ def score_all(samples: list, judge) -> list[dict]:
     return rows
 
 
+def _clip(text: str, n: int = 110) -> str:
+    """回答太长了就截断 —— 汇总里只是给人一个定位的线索，不用全文。"""
+    one_line = " ".join((text or "").split())
+    return one_line if len(one_line) <= n else one_line[:n] + "…"
+
+
 def report(rows: list[dict], skipped: list) -> dict:
     """打印汇总，返回汇总字典。"""
     print()
@@ -472,10 +528,14 @@ def report(rows: list[dict], skipped: list) -> dict:
     )[:3]
     if low:
         print()
-        print("  忠实度最低的几条（看 reason 定位是哪句话没出处）：")
+        print("  忠实度最低的几条（裁判认为有句子没出处的那几条）：")
         for r in low:
-            print(f"    - {r['case'].query!r} "
-                  f"（{r['scores']['faithfulness']:.3f}）：{r['reasons'].get('faithfulness')}")
+            # ⚠️ 实测 ragas collections 的 `MetricResult.reason` **经常是 None** ——
+            #    别指望它给出「哪句话没出处」。没有就退回看回答本身：
+            #    分数 + 回答一起看，人才判得出来是模型编的、还是上下文没还原全。
+            why = r["reasons"].get("faithfulness")
+            detail = why or f"（裁判没给 reason）回答：{_clip(r['reply'])}"
+            print(f"    - {r['case'].query!r}（{r['scores']['faithfulness']:.3f}）{detail}")
 
     if skipped:
         print()

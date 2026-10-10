@@ -1,0 +1,115 @@
+{
+  "summary": {
+    "n": 4,
+    "faithfulness": 0.7327,
+    "faithfulness_n": 4,
+    "context_precision_with_reference": 1.0,
+    "context_precision_with_reference_n": 4,
+    "context_recall": 1.0,
+    "context_recall_n": 4
+  },
+  "skipped": [],
+  "cases": [
+    {
+      "query": "同济高数",
+      "expect": [
+        "高等数学"
+      ],
+      "reply": "找到几本《高等数学》，但价格都未标注：\n\n| post_id | 书名 | 价格 |\n|---|---|---|\n| 209 | 高等数学 | 未知 |\n| 187 | 高等数学 | 未知 |\n| 169 | 高等数学 | 未知 |\n| 145 | 高等数学 | 未知 |\n| 125 | 高等数学 | 未知 |\n\n这几条摘要里都没有价格信息。如果你想了解某一本的成色、有没有笔记、是否还在售，告诉我具体是哪一条（post_id），我去查详情。",
+      "contexts": [
+        "编号 209 《高等数学》 价格 未知",
+        "编号 187 《高等数学》 价格 未知",
+        "编号 169 《高等数学》 价格 未知",
+        "编号 145 《高等数学》 价格 未知",
+        "编号 125 《高等数学》 价格 未知"
+      ],
+      "scores": {
+        "faithfulness": 0.8666666666666667,
+        "context_precision_with_reference": 0.99999999998,
+        "context_recall": 1.0
+      },
+      "reasons": {
+        "faithfulness": null,
+        "context_precision_with_reference": null,
+        "context_recall": null
+      }
+    },
+    {
+      "query": "计算机网络",
+      "expect": [
+        "计算机网络"
+      ],
+      "reply": "找到几本《计算机网络》：\n\n| post_id | 书名 | 价格 |\n|---|---|---|\n| 37 | 计算机网络 | ¥20 |\n| 24 | 计算机网络 | ¥20 |\n| 6168 | 计算机网络 | ¥35 |\n| 2000 | 计算机网络 | ¥40 |\n| 8 | 计算机网络 | ¥20 |\n\n需要我查其中某一本的成色、有没有笔记、是否还在售吗？告诉我 post_id 就行。",
+      "contexts": [
+        "编号 37 《计算机网络》 价格 20.0",
+        "编号 24 《计算机网络》 价格 20.0",
+        "编号 6168 《计算机网络》 价格 35.0",
+        "编号 2000 《计算机网络》 价格 40.0",
+        "编号 8 《计算机网络》 价格 20.0"
+      ],
+      "scores": {
+        "faithfulness": 0.75,
+        "context_precision_with_reference": 0.99999999998,
+        "context_recall": 1.0
+      },
+      "reasons": {
+        "faithfulness": null,
+        "context_precision_with_reference": null,
+        "context_recall": null
+      }
+    },
+    {
+      "query": "软件工程",
+      "expect": [
+        "软件工程"
+      ],
+      "reply": "找到几本《软件工程》：\n\n| 书名 | 价格 |\n|---|---|\n| 软件工程 | ¥22 |\n| 软件工程 | ¥20 |\n| 软件工程 | ¥18 |\n| 软件工程 | ¥22 |\n| 软件工程 | ¥40 |\n\n需要看哪一本的成色、有没有笔记或是否还在售，告诉我价格或序号就行。",
+      "contexts": [
+        "编号 100 《软件工程》 价格 22.0",
+        "编号 87 《软件工程》 价格 20.0",
+        "编号 65 《软件工程》 价格 18.0",
+        "编号 70 《软件工程》 价格 22.0",
+        "编号 50 《软件工程》 价格 40.0"
+      ],
+      "scores": {
+        "faithfulness": 0.6,
+        "context_precision_with_reference": 0.99999999998,
+        "context_recall": 1.0
+      },
+      "reasons": {
+        "faithfulness": null,
+        "context_precision_with_reference": null,
+        "context_recall": null
+      }
+    },
+    {
+      "query": "有没有高数书",
+      "expect": [
+        "高等数学"
+      ],
+      "reply": "找到几本《高等数学》，不过价格都未标注：\n\n| 书名 | 价格 |\n|---|---|\n| 高等数学 | 未知 |\n| 高等数学 | 未知 |\n| 高等数学 | 未知 |\n| 高等数学 | 未知 |\n| 高等数学 | 未知 |\n| 高等数学 | 未知 |\n| 高等数学 | 未知 |\n| 高等数学 | 未知 |\n| 高等数学 | 未知 |\n| 数学 | 8.0 元 |\n\n一共 9 条《高等数学》记录，价格都没有标；另外有一本《数学》，8 元。\n\n需要我查其中某一本的成色、有没有笔记、是否还在售吗？告诉我你想看哪一本就行。",
+      "contexts": [
+        "编号 209 《高等数学》 价格 未知",
+        "编号 187 《高等数学》 价格 未知",
+        "编号 169 《高等数学》 价格 未知",
+        "编号 145 《高等数学》 价格 未知",
+        "编号 125 《高等数学》 价格 未知",
+        "编号 104 《高等数学》 价格 未知",
+        "编号 89 《高等数学》 价格 未知",
+        "编号 25 《高等数学》 价格 未知",
+        "编号 6 《高等数学》 价格 未知",
+        "编号 8799 《数学》 价格 8.0"
+      ],
+      "scores": {
+        "faithfulness": 0.7142857142857143,
+        "context_precision_with_reference": 0.9999999999888889,
+        "context_recall": 1.0
+      },
+      "reasons": {
+        "faithfulness": null,
+        "context_precision_with_reference": null,
+        "context_recall": null
+      }
+    }
+  ]
+}
